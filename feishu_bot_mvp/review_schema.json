@@ -1,0 +1,46 @@
+{
+  "type": "object",
+  "properties": {
+    "risk_level": {
+      "type": "string",
+      "enum": ["low", "medium", "high"]
+    },
+    "scene": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "red_flags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "maxItems": 4
+    },
+    "impact": {
+      "type": "string"
+    },
+    "standard_rewrite": {
+      "type": "string"
+    },
+    "firm_rewrite": {
+      "type": "string"
+    },
+    "next_move": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "risk_level",
+    "scene",
+    "summary",
+    "red_flags",
+    "impact",
+    "standard_rewrite",
+    "firm_rewrite",
+    "next_move"
+  ],
+  "additionalProperties": false
+}

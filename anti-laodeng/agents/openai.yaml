@@ -1,0 +1,4 @@
+interface:
+  display_name: "Anti Lao Deng"
+  short_description: "Catch paternalistic workplace language early"
+  default_prompt: "Use $anti-laodeng to review this workplace message and rewrite it so it stays clear without sounding paternalistic."
