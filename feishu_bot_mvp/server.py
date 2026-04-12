@@ -666,16 +666,43 @@ def format_review_text(review: Dict[str, Any]) -> str:
 
 PREFIX_PATTERN = re.compile(r"^\s*(To|Re领导|Re同事)\s*[:：]?\s*(.*)$", re.IGNORECASE | re.DOTALL)
 
+_LEADER_ATTR_RE = re.compile(
+    r"(领导|老板|经理|主管|总监|组长|部长|boss|leader)(说|发的|发来|讲|问我|跟我说|给我发)",
+    re.IGNORECASE,
+)
+_PEER_ATTR_RE = re.compile(
+    r"(同事|他|她|对方|那个人|那人)(说|发的|发来|讲|跟我说|给我发)",
+)
+_IMPERATIVE_TO_USER_RE = re.compile(
+    r"(你必须|你给我|你今天|你马上|你赶紧|给我一个交代|给我结果|别跟我解释|别再找理由|别给我找|今晚必须给我|不要再给我)",
+)
+_FIRST_PERSON_DRAFT_RE = re.compile(
+    r"(我想跟|我准备发|我要发|我打算说|我想说|我准备回|我要回)",
+)
+
+
+def infer_message_intent(text: str) -> Dict[str, str]:
+    if _LEADER_ATTR_RE.search(text):
+        return {"mode": "incoming_counter", "prefix": "Re领导", "sender_role": "manager"}
+    if _PEER_ATTR_RE.search(text):
+        return {"mode": "incoming_counter", "prefix": "Re领导", "sender_role": "unknown"}
+    if _IMPERATIVE_TO_USER_RE.search(text):
+        return {"mode": "incoming_counter", "prefix": "Re领导", "sender_role": "manager"}
+    if _FIRST_PERSON_DRAFT_RE.search(text):
+        return {"mode": "outgoing_review", "prefix": "To", "sender_role": "unknown"}
+    return {"mode": "outgoing_review", "prefix": "To", "sender_role": "unknown"}
+
 
 def parse_prefixed_request(text: str) -> Dict[str, str]:
     stripped = text.strip()
     match = PREFIX_PATTERN.match(stripped)
     if not match:
+        inferred = infer_message_intent(stripped)
         return {
-            "mode": "outgoing_review",
-            "prefix": "To",
+            "mode": inferred["mode"],
+            "prefix": inferred["prefix"],
             "body": stripped,
-            "sender_role": "unknown",
+            "sender_role": inferred.get("sender_role", "unknown"),
         }
     raw_prefix = match.group(1)
     prefix = raw_prefix.lower()
@@ -1016,6 +1043,7 @@ class BridgeApp:
                     sender_role=sender_role,
                 )
             else:
+                self.feishu.send_text(chat_id, "收到，处理中...")
                 selection, reviewer = self._get_complex_reviewer(chat_id)
                 log(f"complex counter path provider={selection.provider} model={selection.model} message={message_id}")
                 plan = reviewer.plan_counter(
@@ -1028,6 +1056,7 @@ class BridgeApp:
             if review:
                 log(f"fast review path hit for message {message_id}")
             else:
+                self.feishu.send_text(chat_id, "收到，处理中...")
                 selection, reviewer = self._get_complex_reviewer(chat_id)
                 log(f"complex review path provider={selection.provider} model={selection.model} message={message_id}")
                 review = reviewer.review(request["body"])
