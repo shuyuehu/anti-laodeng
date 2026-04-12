@@ -276,6 +276,22 @@ class FeishuClient:
         if response.get("code") != 0:
             raise RuntimeError(f"send message failed: {response}")
 
+    def send_post(self, chat_id: str, title: str, content: list) -> None:
+        token = self.get_tenant_access_token()
+        post_body = {"zh_cn": {"title": title, "content": content}}
+        payload = {
+            "receive_id": chat_id,
+            "msg_type": "post",
+            "content": json.dumps(post_body, ensure_ascii=False),
+        }
+        response = self._post_json(
+            SEND_MESSAGE_URL,
+            payload,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        if response.get("code") != 0:
+            raise RuntimeError(f"send post failed: {response}")
+
 
 class StructuredReviewerBase:
     def __init__(self, config: Config) -> None:
@@ -319,32 +335,51 @@ class StructuredReviewerBase:
             raise RuntimeError(f"{label} response missing keys: {', '.join(missing)}")
         return payload
 
-    def _build_review_prompts(self, draft_text: str) -> Tuple[str, str]:
+    @staticmethod
+    def _build_context_block(parsed: Dict[str, str], mode: str) -> str:
+        lines = []
+        if parsed.get("scene"):
+            lines.append(f"Scene: {parsed['scene']}")
+        if parsed.get("target"):
+            label = "Sender identity" if mode == "counter" else "Target recipient"
+            lines.append(f"{label}: {parsed['target']}")
+        if parsed.get("purpose"):
+            lines.append(f"Purpose: {parsed['purpose']}")
+        return "\n".join(lines)
+
+    def _build_review_prompts(self, parsed: Dict[str, str]) -> Tuple[str, str]:
         system_prompt = (
             "You are reviewing a single outgoing workplace draft in Chinese before it is sent.\n"
             "Use the provided anti-laodeng guidance as your policy source.\n"
             "Focus on communication impact, not character judgment.\n"
+            "You may optionally include emoji placeholders in your Chinese text fields. "
+            "Format: [:NAME:] where NAME is one of the available names below. Example: [:SMILE:] [:THUMBSUP:] [:FIRE:]. "
+            "Do NOT write [:EMOJI_TYPE:NAME:], just [:NAME:]. Use sparingly (at most 1-2 per response). "
+            "Available names: THUMBSUP, OK, DONE, CheckMark, FIRE, MUSCLE, THINKING, SMILE, Heart, Trophy, CrossMark, PARTY, ROCKET.\n"
             "Return JSON only. Do not wrap it in markdown."
         )
+        context_block = self._build_context_block(parsed, "review")
         user_prompt = (
             f"{self.skill_context}\n\n"
             "Now review this draft.\n"
-            "Requirements:\n"
-            "1. Infer the most likely workplace scene conservatively.\n"
-            "2. Judge whether the message sounds paternalistic, condescending, vague-pressure, moralizing, or humiliating.\n"
+            + (f"Context provided by the user:\n{context_block}\n\n" if context_block else "")
+            + "Requirements:\n"
+            "1. Infer the most likely workplace scene conservatively"
+            + (" (the user has provided scene context above, use it).\n" if parsed.get("scene") else ".\n")
+            + "2. Judge whether the message sounds paternalistic, condescending, vague-pressure, moralizing, or humiliating.\n"
             "3. Produce two Chinese rewrites:\n"
             "   - standard_rewrite: clear and professional\n"
             "   - firm_rewrite: firmer, but still not shaming or moralizing\n"
             "4. If the draft is already okay, still produce polished versions.\n"
             "5. Keep red_flags short and specific.\n\n"
             "Draft:\n"
-            f"```text\n{draft_text}\n```"
+            f"```text\n{parsed['message']}\n```"
         )
         return system_prompt, user_prompt
 
     def _build_counter_prompts(
         self,
-        incoming_text: str,
+        parsed: Dict[str, str],
         sender_role: str = "unknown",
         channel: str = "unknown",
         user_preference: str = "balanced",
@@ -354,17 +389,24 @@ class StructuredReviewerBase:
             "Your job is to suggest a low-risk counter move in Chinese.\n"
             "Do not moralize. Do not tell the user to win the argument.\n"
             "Optimize for protecting delivery, boundaries, evidence, and options.\n"
+            "You may optionally include emoji placeholders in your Chinese text fields. "
+            "Format: [:NAME:] where NAME is one of the available names below. Example: [:SMILE:] [:THUMBSUP:] [:FIRE:]. "
+            "Do NOT write [:EMOJI_TYPE:NAME:], just [:NAME:]. Use sparingly (at most 1-2 per response). "
+            "Available names: THUMBSUP, OK, DONE, CheckMark, FIRE, MUSCLE, THINKING, SMILE, Heart, Trophy, CrossMark, PARTY, ROCKET.\n"
             "Return JSON only. Do not wrap it in markdown."
         )
+        context_block = self._build_context_block(parsed, "counter")
         user_prompt = (
             "Use the following anti-laodeng outgoing guidance and incoming counter guide as policy sources.\n\n"
             f"{self.skill_context}\n\n"
             "=== INCOMING COUNTER GUIDE ===\n"
             f"{self.counter_guide}\n\n"
             "Now analyze this incoming workplace message and propose the safest counter move.\n"
-            "Requirements:\n"
-            "1. Infer the likely pressure type and workplace scene conservatively.\n"
-            "2. Do not suggest public confrontation unless absolutely necessary.\n"
+            + (f"Context provided by the user:\n{context_block}\n\n" if context_block else "")
+            + "Requirements:\n"
+            "1. Infer the likely pressure type and workplace scene conservatively"
+            + (" (the user has provided context above, use it).\n" if context_block else ".\n")
+            + "2. Do not suggest public confrontation unless absolutely necessary.\n"
             "3. Give three reply options in Chinese: reply_soft, reply_balanced, reply_firm.\n"
             "4. Keep the replies practical and directly sendable.\n"
             "5. Include whether the user should leave evidence or escalate.\n"
@@ -373,7 +415,7 @@ class StructuredReviewerBase:
             f"Channel: {channel}\n"
             f"User preference: {user_preference}\n"
             "Incoming message:\n"
-            f"```text\n{incoming_text}\n```"
+            f"```text\n{parsed['message']}\n```"
         )
         return system_prompt, user_prompt
 
@@ -427,8 +469,8 @@ class OpenRouterReviewer(StructuredReviewerBase):
             raise RuntimeError(f"OpenRouter returned empty content: {response_json}")
         return self._extract_json(content)
 
-    def review(self, draft_text: str) -> Dict[str, Any]:
-        system_prompt, user_prompt = self._build_review_prompts(draft_text)
+    def review(self, parsed: Dict[str, str]) -> Dict[str, Any]:
+        system_prompt, user_prompt = self._build_review_prompts(parsed)
         payload = self._complete_json(system_prompt, user_prompt, self.review_schema, "anti_laodeng_review")
         required = [
             "risk_level",
@@ -444,12 +486,12 @@ class OpenRouterReviewer(StructuredReviewerBase):
 
     def plan_counter(
         self,
-        incoming_text: str,
+        parsed: Dict[str, str],
         sender_role: str = "unknown",
         channel: str = "unknown",
         user_preference: str = "balanced",
     ) -> Dict[str, Any]:
-        system_prompt, user_prompt = self._build_counter_prompts(incoming_text, sender_role, channel, user_preference)
+        system_prompt, user_prompt = self._build_counter_prompts(parsed, sender_role, channel, user_preference)
         payload = self._complete_json(system_prompt, user_prompt, self.counter_schema, "anti_laodeng_counter")
         required = list(self.counter_schema["required"])
         return self._validate_payload(payload, required, "counter")
@@ -507,8 +549,8 @@ class CompatibleApiReviewer(StructuredReviewerBase):
             raise RuntimeError(f"Compatible API returned empty content: {response_json}")
         return self._extract_json(content)
 
-    def review(self, draft_text: str) -> Dict[str, Any]:
-        system_prompt, user_prompt = self._build_review_prompts(draft_text)
+    def review(self, parsed: Dict[str, str]) -> Dict[str, Any]:
+        system_prompt, user_prompt = self._build_review_prompts(parsed)
         payload = self._complete_json(system_prompt, user_prompt, self.review_schema, "anti_laodeng_review")
         required = [
             "risk_level",
@@ -524,12 +566,12 @@ class CompatibleApiReviewer(StructuredReviewerBase):
 
     def plan_counter(
         self,
-        incoming_text: str,
+        parsed: Dict[str, str],
         sender_role: str = "unknown",
         channel: str = "unknown",
         user_preference: str = "balanced",
     ) -> Dict[str, Any]:
-        system_prompt, user_prompt = self._build_counter_prompts(incoming_text, sender_role, channel, user_preference)
+        system_prompt, user_prompt = self._build_counter_prompts(parsed, sender_role, channel, user_preference)
         payload = self._complete_json(system_prompt, user_prompt, self.counter_schema, "anti_laodeng_counter")
         required = list(self.counter_schema["required"])
         return self._validate_payload(payload, required, "counter")
@@ -582,8 +624,8 @@ class CodexReviewer(StructuredReviewerBase):
         finally:
             output_path.unlink(missing_ok=True)
 
-    def review(self, draft_text: str) -> Dict[str, Any]:
-        system_prompt, user_prompt = self._build_review_prompts(draft_text)
+    def review(self, parsed: Dict[str, str]) -> Dict[str, Any]:
+        system_prompt, user_prompt = self._build_review_prompts(parsed)
         payload = self._complete_json(system_prompt, user_prompt, self.config.schema_path, "anti-laodeng-review")
         required = [
             "risk_level",
@@ -599,12 +641,12 @@ class CodexReviewer(StructuredReviewerBase):
 
     def plan_counter(
         self,
-        incoming_text: str,
+        parsed: Dict[str, str],
         sender_role: str = "unknown",
         channel: str = "unknown",
         user_preference: str = "balanced",
     ) -> Dict[str, Any]:
-        system_prompt, user_prompt = self._build_counter_prompts(incoming_text, sender_role, channel, user_preference)
+        system_prompt, user_prompt = self._build_counter_prompts(parsed, sender_role, channel, user_preference)
         payload = self._complete_json(system_prompt, user_prompt, self.config.counter_schema_path, "anti-laodeng-counter")
         required = list(self.counter_schema["required"])
         return self._validate_payload(payload, required, "counter")
@@ -642,26 +684,88 @@ def parse_text_content(content: Any) -> str:
     return ""
 
 
+_EMOJI_MAP = {
+    "THUMBSUP": "\U0001f44d", "OK": "\U0001f44c", "DONE": "\u2705",
+    "CheckMark": "\u2705", "FIRE": "\U0001f525", "MUSCLE": "\U0001f4aa",
+    "THINKING": "\U0001f914", "SMILE": "\U0001f60a", "Heart": "\u2764\ufe0f",
+    "Trophy": "\U0001f3c6", "CrossMark": "\u274c", "PARTY": "\U0001f389",
+    "ROCKET": "\U0001f680",
+}
+_EMOJI_PLACEHOLDER_RE = re.compile(r"\[:(?:EMOJI_TYPE:)?(\w+):]")
+_INLINE_TOKEN_RE = re.compile(r"\*\*(.+?)\*\*")
+
+
+def _replace_emoji_placeholders(text: str) -> str:
+    return _EMOJI_PLACEHOLDER_RE.sub(lambda m: _EMOJI_MAP.get(m.group(1), m.group(0)), text)
+
+
+def text_to_post_content(text: str) -> list:
+    text = _replace_emoji_placeholders(text)
+    paragraphs = []
+    for line in text.split("\n"):
+        if not line:
+            continue
+        elements = []
+        last_end = 0
+        for m in _INLINE_TOKEN_RE.finditer(line):
+            if m.start() > last_end:
+                elements.append({"tag": "text", "text": line[last_end:m.start()]})
+            elements.append({"tag": "text", "text": m.group(1), "style": ["bold"]})
+            last_end = m.end()
+        if last_end < len(line):
+            elements.append({"tag": "text", "text": line[last_end:]})
+        if elements:
+            paragraphs.append(elements)
+    return paragraphs
+
+
 def format_review_text(review: Dict[str, Any]) -> str:
     risk_map = {"low": "低风险", "medium": "中风险", "high": "高风险"}
-    lines = [f"老登预检：{risk_map.get(review['risk_level'], review['risk_level'])}"]
+    risk_emoji = {"low": "[:CheckMark:]", "medium": "[:THINKING:]", "high": "[:FIRE:]"}
+    risk = review["risk_level"]
+    lines = [f"**老登预检：**{risk_map.get(risk, risk)} {risk_emoji.get(risk, '')}"]
     red_flags = [item.strip() for item in review.get("red_flags", []) if str(item).strip()]
     if red_flags:
-        lines.extend(["", f"注意：{'；'.join(red_flags[:2])}"])
+        lines.extend(["", f"**注意：**{'；'.join(red_flags[:2])}"])
+    scene = str(review.get("scene", "")).strip()
+    if scene:
+        lines.extend(["", f"**场景：**{scene}"])
     lines.extend(
         [
             "",
-            "标准版：",
+            "**标准版：**",
             review["standard_rewrite"],
             "",
-            "更坚定版：",
+            "**更坚定版：**",
             review["firm_rewrite"],
         ]
     )
     next_move = str(review.get("next_move", "")).strip()
     if next_move:
-        lines.extend(["", f"补一句：{next_move}"])
+        lines.extend(["", f"**补一句：**{next_move}"])
     return "\n".join(lines)
+
+
+_INPUT_FIELD_RE = re.compile(
+    r"(?:^|\n)\s*(场景|对象|发给|回复|目的|意图)\s*[:：]\s*(.+?)(?=\n\s*(?:场景|对象|发给|回复|目的|意图)\s*[:：]|\Z)",
+    re.DOTALL,
+)
+
+
+def parse_user_input(text: str) -> Dict[str, str]:
+    fields: Dict[str, str] = {}
+    for m in _INPUT_FIELD_RE.finditer(text):
+        key = m.group(1).strip()
+        value = m.group(2).strip()
+        if key in ("对象", "发给", "回复"):
+            fields["target"] = value
+        elif key == "场景":
+            fields["scene"] = value
+        elif key in ("目的", "意图"):
+            fields["purpose"] = value
+    message = _INPUT_FIELD_RE.sub("", text).strip()
+    fields["message"] = message or text.strip()
+    return fields
 
 
 PREFIX_PATTERN = re.compile(r"^\s*(To|Re领导|Re同事)\s*[:：]?\s*(.*)$", re.IGNORECASE | re.DOTALL)
@@ -729,47 +833,34 @@ def parse_prefixed_request(text: str) -> Dict[str, str]:
     }
 
 
-def help_text() -> str:
+def usage_text() -> str:
     return (
-        "给我发消息时，请用这三个前缀：\n"
-        "1. `To:` 你准备发出去的话，我帮你做老登预检\n"
-        "2. `Re领导:` 领导发给你的话，我帮你想低风险回复\n"
-        "3. `Re同事:` 同事发给你的话，我帮你想低风险回复\n\n"
-        "复杂表达后端也可以在私聊里改：\n"
-        "- `查看复杂后端`\n"
-        "- `设置复杂后端: codex`\n"
-        "- `设置复杂后端: openrouter`\n"
-        "- `设置复杂后端: compatible`\n"
-        "- `设置复杂后端: compatible interns1/your-fast-model`\n"
-        "- `设置复杂模型: gpt-5.3-codex-spark`\n"
-        "- `重置复杂后端`\n\n"
-        "我会返回：\n"
-        "1. 一版默认可直接发的话\n"
-        "2. 一版更坚定的话\n"
-        "3. 必要时的一条补充动作\n\n"
-        "例子：\n"
-        "- `To: 今晚必须改完，别再给我找理由。`\n"
-        "- `Re领导: 别跟我解释了，今晚必须给我结果。`\n"
-        "- `Re同事: 都是自己人，别老讲边界感。`\n\n"
+        "我是反老登机器人，帮你做两件事：发前预检和来话应对。\n\n"
+        "**用法：**\n"
+        "- To: ... 你准备发出去的话，我帮你做老登预检\n"
+        "- Re领导: ... 领导发给你的话，我帮你想低风险回复\n"
+        "- Re同事: ... 同事发给你的话，我帮你想低风险回复\n"
+        "- 不加前缀也行，我会自动判断\n\n"
+        "**提供更多上下文，效果更好：**\n"
+        "To: 场景：周会后单聊\n"
+        "对象：下属\n"
+        "目的：催进度但不想太冲\n"
+        "今晚必须改完，别再给我找理由。\n\n"
+        "Re领导: 场景：群聊里被点名\n"
+        "对象：部门总监\n"
+        "别跟我解释了，今晚必须给我结果。\n\n"
+        "直接发一句话也完全没问题：\n"
+        "- To: 今晚必须改完，别再给我找理由。\n"
+        "- Re领导: 别跟我解释了，今晚必须给我结果。\n\n"
+        "控制命令：\n"
+        "- 取消：取消处理中的请求\n"
+        "- 查看当前模型：查看正在使用的模型\n"
+        "- 切换到glm5.1\n"
+        "- 切换到gpt-5.4-nano\n"
+        "- 切换到claude-opus-4.6\n"
+        "- 切换到gpt-5.4\n"
+        "- 使用说明：显示本说明\n\n"
         "目前只支持私聊里的文本消息。"
-    )
-
-
-def about_text() -> str:
-    return (
-        "我是一个飞书里的反老登机器人，主要帮你做两件事：\n"
-        "1. 发前预检\n"
-        "2. 来话应对\n\n"
-        "最常用的发法：\n"
-        "- `To: 今晚必须改完，别再给我找理由。`\n"
-        "- `Re领导: 别跟我解释了，今晚必须给我结果。`\n"
-        "- `Re同事: 都是自己人，别老讲边界感。`\n\n"
-        "复杂表达后端也能直接在这里切：\n"
-        "- `查看复杂后端`\n"
-        "- `设置复杂后端: codex`\n"
-        "- `设置复杂模型: gpt-5.3-codex-spark`\n"
-        "- `重置复杂后端`\n\n"
-        "想看完整说明，发 `帮助`。"
     )
 
 
@@ -859,33 +950,27 @@ class BackendSettingsStore:
             return self._default
 
 
-BACKEND_STATUS_COMMANDS = {"查看复杂后端", "查看后端", "当前复杂后端", "当前后端"}
-BACKEND_RESET_COMMANDS = {"重置复杂后端", "重置后端"}
+MODEL_PRESETS: Dict[str, Tuple[str, str]] = {
+    "glm5.1": ("openrouter", "z-ai/glm-5.1"),
+    "gpt-5.4-nano": ("openrouter", "openai/gpt-5.4-nano"),
+    "claude-opus-4.6": ("openrouter", "anthropic/claude-opus-4.6"),
+    "gpt-5.4": ("openrouter", "openai/gpt-5.4"),
+}
+
+BACKEND_STATUS_COMMANDS = {"查看当前模型", "当前模型"}
 
 
 def parse_backend_command(text: str) -> Optional[Dict[str, str]]:
     stripped = text.strip()
     if stripped in BACKEND_STATUS_COMMANDS:
         return {"action": "status"}
-    if stripped in BACKEND_RESET_COMMANDS:
-        return {"action": "reset"}
 
-    provider_match = re.match(r"^\s*设置(?:复杂)?后端\s*[:：]?\s*(.+?)\s*$", stripped, re.IGNORECASE)
-    if provider_match:
-        remainder = provider_match.group(1).strip()
-        if not remainder:
-            return {"action": "invalid", "reason": "missing_provider"}
-        parts = remainder.split(None, 1)
-        provider = parts[0].strip().lower()
-        model = parts[1].strip() if len(parts) > 1 else ""
-        return {"action": "set_provider", "provider": provider, "model": model}
-
-    model_match = re.match(r"^\s*设置(?:复杂)?模型\s*[:：]?\s*(.+?)\s*$", stripped, re.IGNORECASE)
-    if model_match:
-        model = model_match.group(1).strip()
-        if not model:
+    switch_match = re.match(r"^\s*切换到\s*[:：]?\s*(.+?)\s*$", stripped)
+    if switch_match:
+        model_name = switch_match.group(1).strip()
+        if not model_name:
             return {"action": "invalid", "reason": "missing_model"}
-        return {"action": "set_model", "model": model}
+        return {"action": "switch", "model_name": model_name}
     return None
 
 
@@ -898,10 +983,20 @@ class BridgeApp:
         self.backend_settings = BackendSettingsStore(config)
         self._reviewer_cache: Dict[Tuple[str, str], StructuredReviewerBase] = {}
         self._reviewer_cache_lock = threading.Lock()
+        self._cancelled_chats: Dict[str, bool] = {}
+        self._cancelled_lock = threading.Lock()
         self.deduper = InMemoryDeduper()
         self.queue: "queue.Queue[Dict[str, Any]]" = queue.Queue()
         self.worker = threading.Thread(target=self._worker_loop, daemon=True)
         self.worker.start()
+
+    def _cancel(self, chat_id: str) -> None:
+        with self._cancelled_lock:
+            self._cancelled_chats[chat_id] = True
+
+    def _is_cancelled(self, chat_id: str) -> bool:
+        with self._cancelled_lock:
+            return self._cancelled_chats.pop(chat_id, False)
 
     def _worker_loop(self) -> None:
         while True:
@@ -945,21 +1040,15 @@ class BridgeApp:
 
     def _format_backend_status(self, chat_id: str) -> str:
         selection = self.backend_settings.get(chat_id)
+        preset_names = " / ".join(MODEL_PRESETS.keys())
         lines = [
-            "复杂表达后端设置：",
-            f"当前后端：{selection.provider}",
-            f"当前模型：{selection.model or '未设置'}",
-            "作用范围：当前和机器人的这个私聊会话",
+            f"当前模型：{selection.model}",
             "",
-            "可用命令：",
-            "- 查看复杂后端",
-            "- 设置复杂后端: codex",
-            "- 设置复杂后端: openrouter",
-            "- 设置复杂后端: compatible",
-            "- 设置复杂后端: compatible interns1/your-fast-model",
-            "- 设置复杂模型: gpt-5.3-codex-spark",
-            "- 重置复杂后端",
+            "可切换模型：",
         ]
+        for name, (_, model_id) in MODEL_PRESETS.items():
+            marker = " ← 当前" if model_id == selection.model else ""
+            lines.append(f"- 切换到{name}{marker}")
         return "\n".join(lines)
 
     def _handle_backend_command(self, chat_id: str, text: str) -> bool:
@@ -970,51 +1059,34 @@ class BridgeApp:
         if action == "status":
             self.feishu.send_text(chat_id, self._format_backend_status(chat_id))
             return True
-        if action == "reset":
-            selection = self.backend_settings.reset(chat_id)
-            self.feishu.send_text(
-                chat_id,
-                f"已恢复复杂表达默认后端。\n当前后端：{selection.provider}\n当前模型：{selection.model}",
-            )
-            return True
         if action == "invalid":
-            reason = command.get("reason", "")
-            if reason == "missing_provider":
-                self.feishu.send_text(chat_id, "没看到后端名称。可用值：codex / openrouter / compatible")
-            elif reason == "missing_model":
-                self.feishu.send_text(chat_id, "没看到模型名。示例：设置复杂模型: gpt-5.3-codex-spark")
-            else:
-                self.feishu.send_text(chat_id, "复杂表达后端命令没看懂，发“查看复杂后端”我给你看可用写法。")
+            preset_names = " / ".join(MODEL_PRESETS.keys())
+            self.feishu.send_text(chat_id, f"没看到模型名。可用：{preset_names}")
             return True
-        current = self.backend_settings.get(chat_id)
-        provider = current.provider
-        model = current.model
-        if action == "set_provider":
-            provider = command["provider"].strip().lower()
-            if provider not in SUPPORTED_COMPLEX_PROVIDERS:
+        if action == "switch":
+            model_name = command["model_name"]
+            preset = MODEL_PRESETS.get(model_name)
+            if not preset:
+                preset_names = " / ".join(MODEL_PRESETS.keys())
                 self.feishu.send_text(
                     chat_id,
-                    f"暂不支持这个复杂后端：{provider}\n可用值：codex / openrouter / compatible",
+                    f"没有这个预设模型：{model_name}\n可用：{preset_names}",
                 )
                 return True
-            model = command.get("model", "").strip() or active_model_for_provider(self.config, provider)
-        elif action == "set_model":
-            model = command["model"].strip()
-        try:
-            selection = RuntimeBackendSelection(provider=provider, model=model, source="custom")
-            runtime_config = with_runtime_backend(self.config, selection.provider, selection.model)
-            reviewer = build_complex_reviewer(runtime_config)
-            with self._reviewer_cache_lock:
-                self._reviewer_cache[selection.cache_key()] = reviewer
-            self.backend_settings.set(chat_id, provider=selection.provider, model=selection.model)
-        except Exception as exc:
-            self.feishu.send_text(chat_id, f"这个复杂后端设置没生效：{exc}")
+            provider, model_id = preset
+            try:
+                selection = RuntimeBackendSelection(provider=provider, model=model_id, source="custom")
+                runtime_config = with_runtime_backend(self.config, selection.provider, selection.model)
+                reviewer = build_complex_reviewer(runtime_config)
+                with self._reviewer_cache_lock:
+                    self._reviewer_cache[selection.cache_key()] = reviewer
+                self.backend_settings.set(chat_id, provider=selection.provider, model=selection.model)
+            except Exception as exc:
+                self.feishu.send_text(chat_id, f"切换失败：{exc}")
+                return True
+            self.feishu.send_text(chat_id, f"已切换到 {model_name}\n模型：{model_id}")
             return True
-        self.feishu.send_text(
-            chat_id,
-            f"已更新复杂表达后端。\n当前后端：{selection.provider}\n当前模型：{selection.model}",
-        )
-        return True
+        return False
 
     def _process_message_task(self, task: Dict[str, Any]) -> None:
         text = task["text"]
@@ -1022,16 +1094,11 @@ class BridgeApp:
         message_id = task["message_id"]
         log(f"processing message {message_id} in chat {chat_id}")
 
-        if text in {"帮助", "help", "HELP", "/help"}:
-            self.feishu.send_text(chat_id, help_text())
-            return
-        if text in {"关于", "about", "ABOUT", "/about"}:
-            self.feishu.send_text(chat_id, about_text())
-            return
-        if self._handle_backend_command(chat_id, text):
-            return
+        self._is_cancelled(chat_id)
 
+        used_complex = False
         request = parse_prefixed_request(text)
+        parsed = parse_user_input(request["body"])
         if request["mode"] == "incoming_counter":
             sender_role = request["sender_role"]
             analysis = self.fast_reviewer.analyze(request["body"])
@@ -1047,9 +1114,13 @@ class BridgeApp:
                 selection, reviewer = self._get_complex_reviewer(chat_id)
                 log(f"complex counter path provider={selection.provider} model={selection.model} message={message_id}")
                 plan = reviewer.plan_counter(
-                    request["body"],
+                    parsed,
                     sender_role=sender_role,
                 )
+                used_complex = True
+            if used_complex and self._is_cancelled(chat_id):
+                log(f"cancelled after complex counter for message {message_id}")
+                return
             response_text = format_counter_text(plan)
         else:
             review = self.fast_reviewer.review(request["body"])
@@ -1059,9 +1130,16 @@ class BridgeApp:
                 self.feishu.send_text(chat_id, "收到，处理中...")
                 selection, reviewer = self._get_complex_reviewer(chat_id)
                 log(f"complex review path provider={selection.provider} model={selection.model} message={message_id}")
-                review = reviewer.review(request["body"])
+                review = reviewer.review(parsed)
+                used_complex = True
+            if used_complex and self._is_cancelled(chat_id):
+                log(f"cancelled after complex review for message {message_id}")
+                return
             response_text = format_review_text(review)
-        self.feishu.send_text(chat_id, response_text)
+        if used_complex:
+            self.feishu.send_text(chat_id, "✅ 处理成功")
+        post_content = text_to_post_content(response_text)
+        self.feishu.send_post(chat_id, "", post_content)
 
     def _accept_message_event(
         self,
@@ -1083,7 +1161,7 @@ class BridgeApp:
                     {
                         "chat_id": chat_id,
                         "message_id": message_id or f"non-text-{time.time()}",
-                        "text": "帮助",
+                        "text": "使用说明",
                     }
                 )
             return
@@ -1091,6 +1169,27 @@ class BridgeApp:
             return
         text = parse_text_content(content)
         if not chat_id or not text:
+            return
+        stripped = text.strip()
+        if stripped in {"取消", "cancel", "CANCEL", "/cancel"}:
+            self._cancel(chat_id)
+            try:
+                self.feishu.send_text(chat_id, "已取消当前处理。")
+            except Exception:
+                log("failed to send cancel notice:\n" + traceback.format_exc())
+            return
+        if stripped in {"使用说明", "关于", "about", "ABOUT", "/about"}:
+            try:
+                post_content = text_to_post_content(usage_text())
+                self.feishu.send_post(chat_id, "", post_content)
+            except Exception:
+                log("failed to send usage text:\n" + traceback.format_exc())
+            return
+        if parse_backend_command(stripped):
+            try:
+                self._handle_backend_command(chat_id, stripped)
+            except Exception:
+                log("failed to handle backend command:\n" + traceback.format_exc())
             return
         self.queue.put({"chat_id": chat_id, "message_id": message_id or str(time.time()), "text": text})
 
@@ -1221,6 +1320,7 @@ def review_once(config: Config, text: str) -> None:
     fast_reviewer = build_fast_reviewer(config)
     counter_planner = build_counter_planner()
     request = parse_prefixed_request(text)
+    parsed = parse_user_input(request["body"])
     if request["mode"] == "incoming_counter":
         sender_role = request["sender_role"]
         analysis = fast_reviewer.analyze(request["body"])
@@ -1228,13 +1328,13 @@ def review_once(config: Config, text: str) -> None:
             plan = counter_planner.plan(request["body"], analysis, sender_role=sender_role)
         else:
             reviewer = build_complex_reviewer(config)
-            plan = reviewer.plan_counter(request["body"], sender_role=sender_role)
+            plan = reviewer.plan_counter(parsed, sender_role=sender_role)
         print(format_counter_text(plan))
         return
     review = fast_reviewer.review(request["body"])
     if not review:
         reviewer = build_complex_reviewer(config)
-        review = reviewer.review(request["body"])
+        review = reviewer.review(parsed)
     print(format_review_text(review))
 
 

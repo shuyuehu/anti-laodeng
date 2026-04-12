@@ -295,16 +295,16 @@ class IncomingCounterPlanner:
 
 def format_counter_text(plan: Dict[str, Any]) -> str:
     lines: List[str] = [
-        f"场景：{plan['scene']}",
-        f"你的即时目标：{plan['counter_goal']}",
+        f"**场景：**{plan['scene']}",
+        f"**你的即时目标：**{plan['counter_goal']}",
         "",
-        "建议这样回：",
+        "**建议这样回：** [:OK:]",
         plan["reply_balanced"],
         "",
-        "如果你想更坚定一点：",
+        "**如果你想更坚定一点：** [:MUSCLE:]",
         plan["reply_firm"],
     ]
     follow_up_action = str(plan.get("follow_up_action", "")).strip()
     if follow_up_action:
-        lines.extend(["", f"后续：{follow_up_action}"])
+        lines.extend(["", f"**后续：**{follow_up_action}"])
     return "\n".join(lines)
