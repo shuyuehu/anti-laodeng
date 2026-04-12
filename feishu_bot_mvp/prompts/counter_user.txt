@@ -1,0 +1,24 @@
+Use the following anti-laodeng outgoing guidance and incoming counter guide as policy sources.
+
+{skill_context}
+
+=== INCOMING COUNTER GUIDE ===
+{counter_guide}
+
+Now analyze this incoming workplace message and propose the safest counter move.
+{context_block}
+Requirements:
+1. Infer the likely pressure type and workplace scene conservatively{scene_hint}.
+2. Do not suggest public confrontation unless absolutely necessary.
+3. Give three reply options in Chinese: reply_soft, reply_balanced, reply_firm.
+4. Keep the replies practical and directly sendable.
+5. Include whether the user should leave evidence or escalate.
+6. Keep matched_families short and concrete.
+
+Sender role: {sender_role}
+Channel: {channel}
+User preference: {user_preference}
+Incoming message:
+```text
+{message}
+```

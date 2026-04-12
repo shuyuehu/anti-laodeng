@@ -293,6 +293,9 @@ class FeishuClient:
             raise RuntimeError(f"send post failed: {response}")
 
 
+PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
+
+
 class StructuredReviewerBase:
     def __init__(self, config: Config) -> None:
         self.config = config
@@ -300,6 +303,10 @@ class StructuredReviewerBase:
         self.counter_guide = self.config.counter_guide_path.read_text(encoding="utf-8")
         self.review_schema = json.loads(self.config.schema_path.read_text(encoding="utf-8"))
         self.counter_schema = json.loads(self.config.counter_schema_path.read_text(encoding="utf-8"))
+        self._review_system_tpl = (PROMPTS_DIR / "review_system.txt").read_text(encoding="utf-8").strip()
+        self._review_user_tpl = (PROMPTS_DIR / "review_user.txt").read_text(encoding="utf-8").strip()
+        self._counter_system_tpl = (PROMPTS_DIR / "counter_system.txt").read_text(encoding="utf-8").strip()
+        self._counter_user_tpl = (PROMPTS_DIR / "counter_user.txt").read_text(encoding="utf-8").strip()
 
     def _load_skill_context(self) -> str:
         skill_md = self.config.skill_path / "SKILL.md"
@@ -323,11 +330,25 @@ class StructuredReviewerBase:
         try:
             return json.loads(text)
         except json.JSONDecodeError:
-            start = text.find("{")
-            end = text.rfind("}")
-            if start != -1 and end != -1 and end > start:
-                return json.loads(text[start : end + 1])
-            raise
+            pass
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            snippet = text[start : end + 1]
+            try:
+                return json.loads(snippet)
+            except json.JSONDecodeError:
+                pass
+            fixed = re.sub(r'"\s*\n\s*"', '",\n"', snippet)
+            fixed = re.sub(r'"\s*\n\s*}', '"\n}', fixed)
+            fixed = re.sub(r'"\s*\n\s*]', '"\n]', fixed)
+            fixed = re.sub(r']\s*\n\s*"', '],\n"', fixed)
+            fixed = re.sub(r'}\s*\n\s*"', '},\n"', fixed)
+            try:
+                return json.loads(fixed)
+            except json.JSONDecodeError:
+                pass
+        raise RuntimeError(f"Failed to parse JSON from LLM response: {text[:500]}")
 
     def _validate_payload(self, payload: Dict[str, Any], required: list[str], label: str) -> Dict[str, Any]:
         missing = [key for key in required if key not in payload]
@@ -348,32 +369,13 @@ class StructuredReviewerBase:
         return "\n".join(lines)
 
     def _build_review_prompts(self, parsed: Dict[str, str]) -> Tuple[str, str]:
-        system_prompt = (
-            "You are reviewing a single outgoing workplace draft in Chinese before it is sent.\n"
-            "Use the provided anti-laodeng guidance as your policy source.\n"
-            "Focus on communication impact, not character judgment.\n"
-            "You may optionally include emoji placeholders in your Chinese text fields. "
-            "Format: [:NAME:] where NAME is one of the available names below. Example: [:SMILE:] [:THUMBSUP:] [:FIRE:]. "
-            "Do NOT write [:EMOJI_TYPE:NAME:], just [:NAME:]. Use sparingly (at most 1-2 per response). "
-            "Available names: THUMBSUP, OK, DONE, CheckMark, FIRE, MUSCLE, THINKING, SMILE, Heart, Trophy, CrossMark, PARTY, ROCKET.\n"
-            "Return JSON only. Do not wrap it in markdown."
-        )
+        system_prompt = self._review_system_tpl
         context_block = self._build_context_block(parsed, "review")
-        user_prompt = (
-            f"{self.skill_context}\n\n"
-            "Now review this draft.\n"
-            + (f"Context provided by the user:\n{context_block}\n\n" if context_block else "")
-            + "Requirements:\n"
-            "1. Infer the most likely workplace scene conservatively"
-            + (" (the user has provided scene context above, use it).\n" if parsed.get("scene") else ".\n")
-            + "2. Judge whether the message sounds paternalistic, condescending, vague-pressure, moralizing, or humiliating.\n"
-            "3. Produce two Chinese rewrites:\n"
-            "   - standard_rewrite: clear and professional\n"
-            "   - firm_rewrite: firmer, but still not shaming or moralizing\n"
-            "4. If the draft is already okay, still produce polished versions.\n"
-            "5. Keep red_flags short and specific.\n\n"
-            "Draft:\n"
-            f"```text\n{parsed['message']}\n```"
+        user_prompt = self._review_user_tpl.format(
+            skill_context=self.skill_context,
+            context_block=f"Context provided by the user:\n{context_block}\n\n" if context_block else "",
+            scene_hint=" (the user has provided scene context above, use it)" if parsed.get("scene") else "",
+            message=parsed["message"],
         )
         return system_prompt, user_prompt
 
@@ -384,38 +386,17 @@ class StructuredReviewerBase:
         channel: str = "unknown",
         user_preference: str = "balanced",
     ) -> Tuple[str, str]:
-        system_prompt = (
-            "You are analyzing a workplace message that the user received from someone else.\n"
-            "Your job is to suggest a low-risk counter move in Chinese.\n"
-            "Do not moralize. Do not tell the user to win the argument.\n"
-            "Optimize for protecting delivery, boundaries, evidence, and options.\n"
-            "You may optionally include emoji placeholders in your Chinese text fields. "
-            "Format: [:NAME:] where NAME is one of the available names below. Example: [:SMILE:] [:THUMBSUP:] [:FIRE:]. "
-            "Do NOT write [:EMOJI_TYPE:NAME:], just [:NAME:]. Use sparingly (at most 1-2 per response). "
-            "Available names: THUMBSUP, OK, DONE, CheckMark, FIRE, MUSCLE, THINKING, SMILE, Heart, Trophy, CrossMark, PARTY, ROCKET.\n"
-            "Return JSON only. Do not wrap it in markdown."
-        )
+        system_prompt = self._counter_system_tpl
         context_block = self._build_context_block(parsed, "counter")
-        user_prompt = (
-            "Use the following anti-laodeng outgoing guidance and incoming counter guide as policy sources.\n\n"
-            f"{self.skill_context}\n\n"
-            "=== INCOMING COUNTER GUIDE ===\n"
-            f"{self.counter_guide}\n\n"
-            "Now analyze this incoming workplace message and propose the safest counter move.\n"
-            + (f"Context provided by the user:\n{context_block}\n\n" if context_block else "")
-            + "Requirements:\n"
-            "1. Infer the likely pressure type and workplace scene conservatively"
-            + (" (the user has provided context above, use it).\n" if context_block else ".\n")
-            + "2. Do not suggest public confrontation unless absolutely necessary.\n"
-            "3. Give three reply options in Chinese: reply_soft, reply_balanced, reply_firm.\n"
-            "4. Keep the replies practical and directly sendable.\n"
-            "5. Include whether the user should leave evidence or escalate.\n"
-            "6. Keep matched_families short and concrete.\n\n"
-            f"Sender role: {sender_role}\n"
-            f"Channel: {channel}\n"
-            f"User preference: {user_preference}\n"
-            "Incoming message:\n"
-            f"```text\n{parsed['message']}\n```"
+        user_prompt = self._counter_user_tpl.format(
+            skill_context=self.skill_context,
+            counter_guide=self.counter_guide,
+            context_block=f"Context provided by the user:\n{context_block}\n\n" if context_block else "",
+            scene_hint=" (the user has provided context above, use it)" if context_block else "",
+            sender_role=sender_role,
+            channel=channel,
+            user_preference=user_preference,
+            message=parsed["message"],
         )
         return system_prompt, user_prompt
 
@@ -768,7 +749,7 @@ def parse_user_input(text: str) -> Dict[str, str]:
     return fields
 
 
-PREFIX_PATTERN = re.compile(r"^\s*(To|Re领导|Re同事)\s*[:：]?\s*(.*)$", re.IGNORECASE | re.DOTALL)
+PREFIX_PATTERN = re.compile(r"^\s*(To|Re领导|Re同事|Re)\s*[:：]\s*(.*)$", re.IGNORECASE | re.DOTALL)
 
 _LEADER_ATTR_RE = re.compile(
     r"(领导|老板|经理|主管|总监|组长|部长|boss|leader)(说|发的|发来|讲|问我|跟我说|给我发)",
@@ -825,6 +806,13 @@ def parse_prefixed_request(text: str) -> Dict[str, str]:
             "body": body,
             "sender_role": "peer",
         }
+    if prefix == "re":
+        return {
+            "mode": "incoming_counter",
+            "prefix": "Re",
+            "body": body,
+            "sender_role": "unknown",
+        }
     return {
         "mode": "outgoing_review",
         "prefix": "To" if prefix == "to" else raw_prefix,
@@ -838,8 +826,9 @@ def usage_text() -> str:
         "我是反老登机器人，帮你做两件事：发前预检和来话应对。\n\n"
         "**用法：**\n"
         "- To: ... 你准备发出去的话，我帮你做老登预检\n"
-        "- Re领导: ... 领导发给你的话，我帮你想低风险回复\n"
-        "- Re同事: ... 同事发给你的话，我帮你想低风险回复\n"
+        "- Re: ... 别人发给你的话，我帮你想低风险回复\n"
+        "- Re领导: ... 领导发给你的（更精准）\n"
+        "- Re同事: ... 同事发给你的（更精准）\n"
         "- 不加前缀也行，我会自动判断\n\n"
         "**提供更多上下文，效果更好：**\n"
         "To: 场景：周会后单聊\n"

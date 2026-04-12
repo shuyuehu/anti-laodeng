@@ -1,0 +1,17 @@
+{skill_context}
+
+Now review this draft.
+{context_block}
+Requirements:
+1. Infer the most likely workplace scene conservatively{scene_hint}.
+2. Judge whether the message sounds paternalistic, condescending, vague-pressure, moralizing, or humiliating.
+3. Produce two Chinese rewrites:
+   - standard_rewrite: clear and professional
+   - firm_rewrite: firmer, but still not shaming or moralizing
+4. If the draft is already okay, still produce polished versions.
+5. Keep red_flags short and specific.
+
+Draft:
+```text
+{message}
+```
