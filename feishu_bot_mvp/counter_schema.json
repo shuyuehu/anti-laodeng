@@ -18,17 +18,13 @@
       "type": "array",
       "items": {
         "type": "string"
-      },
-      "minItems": 1,
-      "maxItems": 4
+      }
     },
     "matched_red_flags": {
       "type": "array",
       "items": {
         "type": "string"
-      },
-      "minItems": 1,
-      "maxItems": 4
+      }
     },
     "counter_goal": {
       "type": "string"

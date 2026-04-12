@@ -15,9 +15,7 @@
       "type": "array",
       "items": {
         "type": "string"
-      },
-      "minItems": 1,
-      "maxItems": 4
+      }
     },
     "impact": {
       "type": "string"

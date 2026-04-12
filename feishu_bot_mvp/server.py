@@ -24,6 +24,29 @@ from counter_strategy_bank import IncomingCounterPlanner, format_counter_text
 from fast_path_bank import FastReviewer
 
 
+def _load_dotenv(path: Path) -> None:
+    if not path.is_file():
+        return
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip()
+            if not key:
+                continue
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+                value = value[1:-1]
+            if value and key not in os.environ:
+                os.environ[key] = value
+
+
+_load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_SKILL_PATH = ROOT_DIR / "anti-laodeng"
 DEFAULT_SCHEMA_PATH = Path(__file__).resolve().parent / "review_schema.json"
@@ -364,7 +387,7 @@ class OpenRouterReviewer(StructuredReviewerBase):
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": 0.1,
-            "max_completion_tokens": 700,
+            "max_completion_tokens": 2048,
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {
@@ -441,7 +464,7 @@ class CompatibleApiReviewer(StructuredReviewerBase):
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": 0.1,
-            "max_tokens": 700,
+            "max_tokens": 2048,
         }
         if self.config.compatible_response_format == "json_schema":
             payload["response_format"] = {
