@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import copy
 import json
 import os
 import queue
@@ -14,6 +15,7 @@ import traceback
 import urllib.error
 import urllib.request
 from collections import deque
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -31,6 +33,7 @@ DEFAULT_FEISHU_SDK_VENDOR_PATH = Path(__file__).resolve().parent / "_vendor"
 TENANT_TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
 SEND_MESSAGE_URL = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
+SUPPORTED_COMPLEX_PROVIDERS = ("codex", "openrouter", "compatible")
 
 
 def now_ts() -> str:
@@ -56,6 +59,15 @@ def read_json_object_env(name: str) -> Dict[str, str]:
     if not isinstance(parsed, dict):
         raise ValueError(f"{name} must be a JSON object")
     return {str(key): str(value) for key, value in parsed.items()}
+
+
+def active_model_for_provider(config: "Config", provider: Optional[str] = None) -> str:
+    target = (provider or config.complex_reviewer_provider).strip().lower()
+    if target == "openrouter":
+        return config.openrouter_model
+    if target == "codex":
+        return config.codex_model
+    return config.compatible_model
 
 
 class Config:
@@ -673,6 +685,14 @@ def help_text() -> str:
         "1. `To:` 你准备发出去的话，我帮你做老登预检\n"
         "2. `Re领导:` 领导发给你的话，我帮你想低风险回复\n"
         "3. `Re同事:` 同事发给你的话，我帮你想低风险回复\n\n"
+        "复杂表达后端也可以在私聊里改：\n"
+        "- `查看复杂后端`\n"
+        "- `设置复杂后端: codex`\n"
+        "- `设置复杂后端: openrouter`\n"
+        "- `设置复杂后端: compatible`\n"
+        "- `设置复杂后端: compatible interns1/your-fast-model`\n"
+        "- `设置复杂模型: gpt-5.3-codex-spark`\n"
+        "- `重置复杂后端`\n\n"
         "我会返回：\n"
         "1. 一版默认可直接发的话\n"
         "2. 一版更坚定的话\n"
@@ -685,11 +705,41 @@ def help_text() -> str:
     )
 
 
+def about_text() -> str:
+    return (
+        "我是一个飞书里的反老登机器人，主要帮你做两件事：\n"
+        "1. 发前预检\n"
+        "2. 来话应对\n\n"
+        "最常用的发法：\n"
+        "- `To: 今晚必须改完，别再给我找理由。`\n"
+        "- `Re领导: 别跟我解释了，今晚必须给我结果。`\n"
+        "- `Re同事: 都是自己人，别老讲边界感。`\n\n"
+        "复杂表达后端也能直接在这里切：\n"
+        "- `查看复杂后端`\n"
+        "- `设置复杂后端: codex`\n"
+        "- `设置复杂模型: gpt-5.3-codex-spark`\n"
+        "- `重置复杂后端`\n\n"
+        "想看完整说明，发 `帮助`。"
+    )
+
+
 def build_fast_reviewer(config: Config) -> FastReviewer:
     return FastReviewer(
         fuzzy_strict_threshold=config.fastpath_fuzzy_strict_threshold,
         fuzzy_assisted_threshold=config.fastpath_fuzzy_assisted_threshold,
     )
+
+
+def with_runtime_backend(config: Config, provider: str, model: Optional[str] = None) -> Config:
+    runtime = copy.copy(config)
+    runtime.complex_reviewer_provider = provider
+    if provider == "openrouter":
+        runtime.openrouter_model = model or runtime.openrouter_model
+    elif provider == "codex":
+        runtime.codex_model = model or runtime.codex_model
+    else:
+        runtime.compatible_model = model or runtime.compatible_model
+    return runtime
 
 
 def build_complex_reviewer(config: Config) -> StructuredReviewerBase:
@@ -706,13 +756,98 @@ def build_counter_planner() -> IncomingCounterPlanner:
     return IncomingCounterPlanner()
 
 
+@dataclass(frozen=True)
+class RuntimeBackendSelection:
+    provider: str
+    model: str
+    source: str = "default"
+
+    def cache_key(self) -> Tuple[str, str]:
+        return (self.provider, self.model)
+
+
+class BackendSettingsStore:
+    def __init__(self, config: Config) -> None:
+        default_provider = config.complex_reviewer_provider
+        self._config = config
+        self._default = RuntimeBackendSelection(
+            provider=default_provider,
+            model=active_model_for_provider(config, default_provider),
+            source="default",
+        )
+        self._overrides: Dict[str, RuntimeBackendSelection] = {}
+        self._lock = threading.Lock()
+
+    def default_selection_for_provider(self, provider: str) -> RuntimeBackendSelection:
+        normalized = provider.strip().lower()
+        return RuntimeBackendSelection(
+            provider=normalized,
+            model=active_model_for_provider(self._config, normalized),
+            source="custom",
+        )
+
+    def get(self, chat_id: str) -> RuntimeBackendSelection:
+        with self._lock:
+            return self._overrides.get(chat_id, self._default)
+
+    def set(self, chat_id: str, provider: Optional[str] = None, model: Optional[str] = None) -> RuntimeBackendSelection:
+        current = self.get(chat_id)
+        next_provider = (provider or current.provider).strip().lower()
+        next_model = (model or "").strip()
+        if provider is not None and not next_model:
+            next_model = active_model_for_provider(self._config, next_provider)
+        elif not next_model:
+            next_model = current.model
+        selection = RuntimeBackendSelection(provider=next_provider, model=next_model, source="custom")
+        with self._lock:
+            self._overrides[chat_id] = selection
+        return selection
+
+    def reset(self, chat_id: str) -> RuntimeBackendSelection:
+        with self._lock:
+            self._overrides.pop(chat_id, None)
+            return self._default
+
+
+BACKEND_STATUS_COMMANDS = {"查看复杂后端", "查看后端", "当前复杂后端", "当前后端"}
+BACKEND_RESET_COMMANDS = {"重置复杂后端", "重置后端"}
+
+
+def parse_backend_command(text: str) -> Optional[Dict[str, str]]:
+    stripped = text.strip()
+    if stripped in BACKEND_STATUS_COMMANDS:
+        return {"action": "status"}
+    if stripped in BACKEND_RESET_COMMANDS:
+        return {"action": "reset"}
+
+    provider_match = re.match(r"^\s*设置(?:复杂)?后端\s*[:：]?\s*(.+?)\s*$", stripped, re.IGNORECASE)
+    if provider_match:
+        remainder = provider_match.group(1).strip()
+        if not remainder:
+            return {"action": "invalid", "reason": "missing_provider"}
+        parts = remainder.split(None, 1)
+        provider = parts[0].strip().lower()
+        model = parts[1].strip() if len(parts) > 1 else ""
+        return {"action": "set_provider", "provider": provider, "model": model}
+
+    model_match = re.match(r"^\s*设置(?:复杂)?模型\s*[:：]?\s*(.+?)\s*$", stripped, re.IGNORECASE)
+    if model_match:
+        model = model_match.group(1).strip()
+        if not model:
+            return {"action": "invalid", "reason": "missing_model"}
+        return {"action": "set_model", "model": model}
+    return None
+
+
 class BridgeApp:
     def __init__(self, config: Config) -> None:
         self.config = config
         self.feishu = FeishuClient(config)
         self.fast_reviewer = build_fast_reviewer(config)
-        self.reviewer = build_complex_reviewer(config)
         self.counter_planner = build_counter_planner()
+        self.backend_settings = BackendSettingsStore(config)
+        self._reviewer_cache: Dict[Tuple[str, str], StructuredReviewerBase] = {}
+        self._reviewer_cache_lock = threading.Lock()
         self.deduper = InMemoryDeduper()
         self.queue: "queue.Queue[Dict[str, Any]]" = queue.Queue()
         self.worker = threading.Thread(target=self._worker_loop, daemon=True)
@@ -733,15 +868,103 @@ class BridgeApp:
         chat_id = task.get("chat_id")
         if not chat_id:
             return
+        selection = self.backend_settings.get(chat_id)
         message = (
             "这次老登预检没跑出来。\n"
-            f"复杂表达当前后端：{self.config.complex_reviewer_provider}\n"
+            f"复杂表达当前后端：{selection.provider}\n"
+            f"当前模型：{selection.model}\n"
             "你可以稍后重试一次；如果持续失败，我会继续走本地模板快路径。"
         )
         try:
             self.feishu.send_text(chat_id, message)
         except Exception:
             log("failed to send failure notice:\n" + traceback.format_exc())
+
+    def _get_complex_reviewer(self, chat_id: str) -> Tuple[RuntimeBackendSelection, StructuredReviewerBase]:
+        selection = self.backend_settings.get(chat_id)
+        cache_key = selection.cache_key()
+        with self._reviewer_cache_lock:
+            reviewer = self._reviewer_cache.get(cache_key)
+            if reviewer is not None:
+                return selection, reviewer
+        runtime_config = with_runtime_backend(self.config, selection.provider, selection.model)
+        reviewer = build_complex_reviewer(runtime_config)
+        with self._reviewer_cache_lock:
+            self._reviewer_cache[cache_key] = reviewer
+        return selection, reviewer
+
+    def _format_backend_status(self, chat_id: str) -> str:
+        selection = self.backend_settings.get(chat_id)
+        lines = [
+            "复杂表达后端设置：",
+            f"当前后端：{selection.provider}",
+            f"当前模型：{selection.model or '未设置'}",
+            "作用范围：当前和机器人的这个私聊会话",
+            "",
+            "可用命令：",
+            "- 查看复杂后端",
+            "- 设置复杂后端: codex",
+            "- 设置复杂后端: openrouter",
+            "- 设置复杂后端: compatible",
+            "- 设置复杂后端: compatible interns1/your-fast-model",
+            "- 设置复杂模型: gpt-5.3-codex-spark",
+            "- 重置复杂后端",
+        ]
+        return "\n".join(lines)
+
+    def _handle_backend_command(self, chat_id: str, text: str) -> bool:
+        command = parse_backend_command(text)
+        if not command:
+            return False
+        action = command["action"]
+        if action == "status":
+            self.feishu.send_text(chat_id, self._format_backend_status(chat_id))
+            return True
+        if action == "reset":
+            selection = self.backend_settings.reset(chat_id)
+            self.feishu.send_text(
+                chat_id,
+                f"已恢复复杂表达默认后端。\n当前后端：{selection.provider}\n当前模型：{selection.model}",
+            )
+            return True
+        if action == "invalid":
+            reason = command.get("reason", "")
+            if reason == "missing_provider":
+                self.feishu.send_text(chat_id, "没看到后端名称。可用值：codex / openrouter / compatible")
+            elif reason == "missing_model":
+                self.feishu.send_text(chat_id, "没看到模型名。示例：设置复杂模型: gpt-5.3-codex-spark")
+            else:
+                self.feishu.send_text(chat_id, "复杂表达后端命令没看懂，发“查看复杂后端”我给你看可用写法。")
+            return True
+        current = self.backend_settings.get(chat_id)
+        provider = current.provider
+        model = current.model
+        if action == "set_provider":
+            provider = command["provider"].strip().lower()
+            if provider not in SUPPORTED_COMPLEX_PROVIDERS:
+                self.feishu.send_text(
+                    chat_id,
+                    f"暂不支持这个复杂后端：{provider}\n可用值：codex / openrouter / compatible",
+                )
+                return True
+            model = command.get("model", "").strip() or active_model_for_provider(self.config, provider)
+        elif action == "set_model":
+            model = command["model"].strip()
+        try:
+            selection = RuntimeBackendSelection(provider=provider, model=model, source="custom")
+            runtime_config = with_runtime_backend(self.config, selection.provider, selection.model)
+            reviewer = build_complex_reviewer(runtime_config)
+            with self._reviewer_cache_lock:
+                self._reviewer_cache[selection.cache_key()] = reviewer
+            self.backend_settings.set(chat_id, provider=selection.provider, model=selection.model)
+        except Exception as exc:
+            self.feishu.send_text(chat_id, f"这个复杂后端设置没生效：{exc}")
+            return True
+        self.feishu.send_text(
+            chat_id,
+            f"已更新复杂表达后端。\n当前后端：{selection.provider}\n当前模型：{selection.model}",
+        )
+        return True
 
     def _process_message_task(self, task: Dict[str, Any]) -> None:
         text = task["text"]
@@ -751,6 +974,11 @@ class BridgeApp:
 
         if text in {"帮助", "help", "HELP", "/help"}:
             self.feishu.send_text(chat_id, help_text())
+            return
+        if text in {"关于", "about", "ABOUT", "/about"}:
+            self.feishu.send_text(chat_id, about_text())
+            return
+        if self._handle_backend_command(chat_id, text):
             return
 
         request = parse_prefixed_request(text)
@@ -765,8 +993,9 @@ class BridgeApp:
                     sender_role=sender_role,
                 )
             else:
-                log(f"complex counter path provider={self.config.complex_reviewer_provider} message={message_id}")
-                plan = self.reviewer.plan_counter(
+                selection, reviewer = self._get_complex_reviewer(chat_id)
+                log(f"complex counter path provider={selection.provider} model={selection.model} message={message_id}")
+                plan = reviewer.plan_counter(
                     request["body"],
                     sender_role=sender_role,
                 )
@@ -776,8 +1005,9 @@ class BridgeApp:
             if review:
                 log(f"fast review path hit for message {message_id}")
             else:
-                log(f"complex review path provider={self.config.complex_reviewer_provider} message={message_id}")
-                review = self.reviewer.review(request["body"])
+                selection, reviewer = self._get_complex_reviewer(chat_id)
+                log(f"complex review path provider={selection.provider} model={selection.model} message={message_id}")
+                review = reviewer.review(request["body"])
             response_text = format_review_text(review)
         self.feishu.send_text(chat_id, response_text)
 
