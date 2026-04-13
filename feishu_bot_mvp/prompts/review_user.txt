@@ -1,0 +1,19 @@
+{skill_context}
+
+Now review this draft.
+{context_block}
+Requirements:
+1. Infer the most likely workplace scene conservatively{scene_hint}.
+2. Judge whether the message sounds paternalistic, condescending, vague-pressure, moralizing, or humiliating.
+3. In the "problem" field, write 2-3 sentences: which words or patterns carry 登味, and how the receiver is likely to feel.
+4. Produce three Chinese rewrites. Each rewrite should be concise and directly sendable (aim for 2-4 sentences, no more):
+   - rewrite_mild: warm and considerate, suitable when the relationship is good
+   - rewrite_balanced: clear and professional, standard workplace tone
+   - rewrite_direct: firm and unambiguous, no sugar-coating but still not shaming
+5. If the draft is already okay, still produce polished versions.
+6. Only include "follow_up" if there is a genuinely useful next-step suggestion; keep it to 1-2 sentences max.
+
+Draft:
+```text
+{message}
+```

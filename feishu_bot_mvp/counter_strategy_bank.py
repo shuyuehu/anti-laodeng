@@ -185,67 +185,67 @@ def _build_reply_variants(primary_key: str, sender_role: str) -> Dict[str, str]:
     if primary_key in progress_like:
         if sender_role == "peer":
             return {
-                "reply_soft": "我先把现状同步给你：当前卡点是 X，预计 Y 时间给你明确结果。为了避免反复来回，我也把依赖和风险一起说清楚。",
+                "reply_mild": "我先把现状同步给你：当前卡点是 X，预计 Y 时间给你明确结果。为了避免反复来回，我也把依赖和风险一起说清楚。",
                 "reply_balanced": "我会继续推进，但需要把当前阻塞点、预计完成时间和依赖关系对齐，不然口头催办解决不了问题。",
-                "reply_firm": "我可以配合推进，但请先把优先级和完成口径定清楚；如果这是最高优先级，其他事项需要顺延。",
+                "reply_direct": "我可以配合推进，但请先把优先级和完成口径定清楚；如果这是最高优先级，其他事项需要顺延。",
             }
         return {
-            "reply_soft": "收到，我先不展开解释。为了按时推进，我会在 20 分钟内给您一版当前状态、阻塞点和预计完成时间。",
+            "reply_mild": "收到，我先不展开解释。为了按时推进，我会在 20 分钟内给您一版当前状态、阻塞点和预计完成时间。",
             "reply_balanced": "收到。我先按结果推进，同时把当前阻塞点和完成时间发您，避免最后才暴露风险。",
-            "reply_firm": "收到，我先执行。涉及交期的阻塞我会同步成书面清单，请您一起确认优先级和取舍。",
+            "reply_direct": "收到，我先执行。涉及交期的阻塞我会同步成书面清单，请您一起确认优先级和取舍。",
         }
 
     if primary_key in feedback_like:
         if sender_role == "peer":
             return {
-                "reply_soft": "收到。为了我能尽快改到位，你方便说下最关键的两个具体问题点吗？我按优先级处理。",
+                "reply_mild": "收到。为了我能尽快改到位，你方便说下最关键的两个具体问题点吗？我按优先级处理。",
                 "reply_balanced": "我先不接抽象评价，直接看具体差距。你把最关键的问题点和期望结果发我，我按这个改。",
-                "reply_firm": "如果要我调整，请直接说事实、差距和标准；只用抽象标签，我没法高质量处理。",
+                "reply_direct": "如果要我调整，请直接说事实、差距和标准；只用抽象标签，我没法高质量处理。",
             }
         return {
-            "reply_soft": "收到，我先把这次结果补上。为了改到位，您方便说下这次最关键的两个具体问题点吗？我按优先级改。",
+            "reply_mild": "收到，我先把这次结果补上。为了改到位，您方便说下这次最关键的两个具体问题点吗？我按优先级改。",
             "reply_balanced": "收到。我先不在抽象词上展开，您直接指出最关键的具体差距和期望标准，我按这个修正。",
-            "reply_firm": "我先承接执行，但需要把问题落到具体事实和标准上，这样我才能按要求改到位。",
+            "reply_direct": "我先承接执行，但需要把问题落到具体事实和标准上，这样我才能按要求改到位。",
         }
 
     if primary_key in moralizing_like:
         if sender_role == "peer":
             return {
-                "reply_soft": "我理解你是想把事情推进快一点。为了避免后面扯不清，我们还是把这次需要我支持的范围、时间点和配合方式说清楚。",
+                "reply_mild": "我理解你是想把事情推进快一点。为了避免后面扯不清，我们还是把这次需要我支持的范围、时间点和配合方式说清楚。",
                 "reply_balanced": "我可以配合，但还是按任务范围、截止时间和当前排期来对齐，这样后面边界不会乱。",
-                "reply_firm": "我愿意配合工作，但还是按任务、排期和责任边界来执行，不太适合再上升到关系或态度。",
+                "reply_direct": "我愿意配合工作，但还是按任务、排期和责任边界来执行，不太适合再上升到关系或态度。",
             }
         return {
-            "reply_soft": "我理解您的出发点。为了把事情推进好，我们还是回到这件事本身：这次最需要我支持的任务范围、时间点和协作方式分别是什么？",
+            "reply_mild": "我理解您的出发点。为了把事情推进好，我们还是回到这件事本身：这次最需要我支持的任务范围、时间点和协作方式分别是什么？",
             "reply_balanced": "没问题，我先按工作要求推进。这件事我更想按任务范围、截止时间和排期来对齐，避免后面边界不清。",
-            "reply_firm": "我会配合工作要求，但还是按任务、排期和责任边界来执行，不太适合再上升到关系或态度。",
+            "reply_direct": "我会配合工作要求，但还是按任务、排期和责任边界来执行，不太适合再上升到关系或态度。",
         }
 
     if primary_key in meeting_like:
         return {
-            "reply_soft": "收到，这个问题我先记下。会后我把原因、修复动作和时间点发出来，先把事情收住。",
+            "reply_mild": "收到，这个问题我先记下。会后我把原因、修复动作和时间点发出来，先把事情收住。",
             "reply_balanced": "收到，我先不在现场展开。会后我会把原因、修复动作和时间点书面同步，避免大家口径不一致。",
-            "reply_firm": "收到，这个问题我会负责收口，但不建议继续在公开场合上升到人身评价。会后我发书面方案。",
+            "reply_direct": "收到，这个问题我会负责收口，但不建议继续在公开场合上升到人身评价。会后我发书面方案。",
         }
 
     if primary_key in boundary_like:
         return {
-            "reply_soft": "我理解现在比较急。为了不影响结果，我先把可投入时间、当前负荷和需要调整的优先级说清楚。",
+            "reply_mild": "我理解现在比较急。为了不影响结果，我先把可投入时间、当前负荷和需要调整的优先级说清楚。",
             "reply_balanced": "我可以支持加急，但需要先确认持续多久、为什么必须现在做，以及哪些事项顺延。",
-            "reply_firm": "我会按优先级支持，但需要把时间范围、牺牲项和后续安排说清楚，否则很容易影响其他交付。",
+            "reply_direct": "我会按优先级支持，但需要把时间范围、牺牲项和后续安排说清楚，否则很容易影响其他交付。",
         }
 
     if primary_key in authority_like:
         return {
-            "reply_soft": "明白您的判断。我先按这个方向推进，同时想确认一下当前最关键的判断依据和风险边界，避免后面返工。",
+            "reply_mild": "明白您的判断。我先按这个方向推进，同时想确认一下当前最关键的判断依据和风险边界，避免后面返工。",
             "reply_balanced": "收到，我可以先执行。为了保证执行准确，我会把当前理解、边界和风险点书面同步给您确认。",
-            "reply_firm": "我先按结论推进，但需要把标准、边界和拍板点明确下来，不然执行层很容易失真。",
+            "reply_direct": "我先按结论推进，但需要把标准、边界和拍板点明确下来，不然执行层很容易失真。",
         }
 
     return {
-        "reply_soft": "收到，我先把这件事落回到任务、边界和时间点上。",
+        "reply_mild": "收到，我先把这件事落回到任务、边界和时间点上。",
         "reply_balanced": "我先不在情绪上展开，先把目标、范围和下一步动作对齐。",
-        "reply_firm": "我可以继续推进，但需要把边界、责任和时间点明确下来。",
+        "reply_direct": "我可以继续推进，但需要把边界、责任和时间点明确下来。",
     }
 
 
@@ -272,39 +272,44 @@ class IncomingCounterPlanner:
             ),
         )
         replies = _build_reply_variants(primary_key, sender_role)
+        analysis_text = f"{analysis['scene']}。{strategy.counter_goal}。{strategy.why}"
+        follow_up_parts = [
+            strategy.follow_up_action,
+            strategy.evidence_advice,
+            strategy.escalation_hint,
+        ]
+        follow_up = "；".join(p for p in follow_up_parts if p and p.strip())
         return {
             "risk_level": analysis["risk_level"],
-            "scene": analysis["scene"],
-            "sender_role": sender_role,
-            "channel": channel,
-            "matched_families": [item["key"] for item in matched],
-            "matched_red_flags": analysis["red_flags"],
-            "counter_goal": strategy.counter_goal,
-            "recommended_mode": strategy.recommended_mode,
-            "reply_soft": replies["reply_soft"],
+            "analysis": analysis_text,
+            "reply_mild": replies["reply_mild"],
             "reply_balanced": replies["reply_balanced"],
-            "reply_firm": replies["reply_firm"],
-            "follow_up_action": strategy.follow_up_action,
-            "evidence_advice": strategy.evidence_advice,
-            "escalation_hint": strategy.escalation_hint,
-            "why": strategy.why,
-            "user_preference": user_preference,
-            "incoming_text": incoming_text,
+            "reply_direct": replies["reply_direct"],
+            "follow_up": follow_up,
         }
+
+
+def _flatten(text: str) -> str:
+    joined = " ".join(line.strip() for line in text.splitlines() if line.strip())
+    joined = joined.replace("**", "")
+    return joined
 
 
 def format_counter_text(plan: Dict[str, Any]) -> str:
     lines: List[str] = [
-        f"场景：{plan['scene']}",
-        f"你的即时目标：{plan['counter_goal']}",
+        "**分析：**",
+        _flatten(plan["analysis"]),
         "",
-        "建议这样回：",
+        "**温和版回复：**",
+        plan["reply_mild"],
+        "",
+        "**平衡版回复：**",
         plan["reply_balanced"],
         "",
-        "如果你想更坚定一点：",
-        plan["reply_firm"],
+        "**反击版回复：**",
+        plan["reply_direct"],
     ]
-    follow_up_action = str(plan.get("follow_up_action", "")).strip()
-    if follow_up_action:
-        lines.extend(["", f"后续：{follow_up_action}"])
+    follow_up = _flatten(str(plan.get("follow_up", "")))
+    if follow_up:
+        lines.extend(["", "**后续建议：**", follow_up])
     return "\n".join(lines)

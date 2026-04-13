@@ -5,75 +5,34 @@
       "type": "string",
       "enum": ["low", "medium", "high"]
     },
-    "scene": {
-      "type": "string"
-    },
-    "sender_role": {
-      "type": "string"
-    },
-    "channel": {
-      "type": "string"
-    },
-    "matched_families": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "minItems": 1,
-      "maxItems": 4
-    },
-    "matched_red_flags": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "minItems": 1,
-      "maxItems": 4
-    },
-    "counter_goal": {
-      "type": "string"
-    },
-    "recommended_mode": {
-      "type": "string"
-    },
-    "reply_soft": {
-      "type": "string"
+    "reply_mild": {
+      "type": "string",
+      "description": "温和版回复，1-3句中文，可直接发送"
     },
     "reply_balanced": {
-      "type": "string"
+      "type": "string",
+      "description": "平衡版回复，1-3句中文，可直接发送"
     },
-    "reply_firm": {
-      "type": "string"
+    "reply_direct": {
+      "type": "string",
+      "description": "反击版回复，1-3句中文，可直接发送"
     },
-    "follow_up_action": {
-      "type": "string"
+    "analysis": {
+      "type": "string",
+      "description": "简要分析，2-3句中文。说明场景、对方的施压策略、用户的即时目标。"
     },
-    "evidence_advice": {
-      "type": "string"
-    },
-    "escalation_hint": {
-      "type": "string"
-    },
-    "why": {
-      "type": "string"
+    "follow_up": {
+      "type": "string",
+      "description": "后续建议，1句中文。如无必要可为空字符串"
     }
   },
   "required": [
     "risk_level",
-    "scene",
-    "sender_role",
-    "channel",
-    "matched_families",
-    "matched_red_flags",
-    "counter_goal",
-    "recommended_mode",
-    "reply_soft",
+    "reply_mild",
     "reply_balanced",
-    "reply_firm",
-    "follow_up_action",
-    "evidence_advice",
-    "escalation_hint",
-    "why"
+    "reply_direct",
+    "analysis",
+    "follow_up"
   ],
   "additionalProperties": false
 }
