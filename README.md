@@ -91,7 +91,7 @@ Bot 拆招 →
 
 ## 📱 界面预览
 
-<img src="docs/screenshot/interface/interface.png" width="600" />
+<p align="center"><img src="docs/screenshot/interface/interface.png" width="600" /></p>
 
 ---
 
@@ -245,5 +245,13 @@ config.example.yaml                 # 配置文件模板
 
 **Bot 收到消息但没回复？**
 检查 `im:message:send_as_bot` 权限是否已开通并审批通过。
+
+---
+
+## 💬 交流群
+
+欢迎加入微信群，聊聊职场反登心得、提需求、报 bug：
+
+<p align="center"><img src="docs/screenshot/interface/群聊截图.png" width="250" /></p>
 
 ---
