@@ -177,7 +177,7 @@ python3 feishu_bot_mvp/server.py
 4. **配置权限**：开通 `im:message`、`im:message.p2p_msg:readonly`、`im:message:send_as_bot` 等权限
 5. **发布应用**：创建版本并发布
 
-> 详细的飞书机器人配置步骤见 [docs/feishu_config.md](docs/feishu_config.md)
+> 详细的飞书机器人配置步骤见 [docs/feishu-bot-config.md](docs/feishu-bot-config.md)
 
 ---
 
