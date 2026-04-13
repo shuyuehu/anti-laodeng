@@ -6,39 +6,38 @@
       "enum": ["low", "medium", "high"]
     },
     "scene": {
-      "type": "string"
+      "type": "string",
+      "description": "推断的职场场景，如催进度、绩效谈话、会议施压等"
     },
-    "summary": {
-      "type": "string"
+    "rewrite_mild": {
+      "type": "string",
+      "description": "温和版改写，2-4句中文，可直接发送"
     },
-    "red_flags": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
+    "rewrite_balanced": {
+      "type": "string",
+      "description": "平衡版改写，2-4句中文，可直接发送"
     },
-    "impact": {
-      "type": "string"
+    "rewrite_direct": {
+      "type": "string",
+      "description": "直接版改写，2-4句中文，可直接发送"
     },
-    "standard_rewrite": {
-      "type": "string"
+    "problem": {
+      "type": "string",
+      "description": "登味来源的简要分析，2-3句中文。说明哪些用词有登味、对方会有什么感受。"
     },
-    "firm_rewrite": {
-      "type": "string"
-    },
-    "next_move": {
-      "type": "string"
+    "follow_up": {
+      "type": "string",
+      "description": "后续建议，1-2句中文。如无必要可为空字符串"
     }
   },
   "required": [
     "risk_level",
     "scene",
-    "summary",
-    "red_flags",
-    "impact",
-    "standard_rewrite",
-    "firm_rewrite",
-    "next_move"
+    "rewrite_mild",
+    "rewrite_balanced",
+    "rewrite_direct",
+    "problem",
+    "follow_up"
   ],
   "additionalProperties": false
 }

@@ -1,0 +1,30 @@
+# ========== 飞书应用 ==========
+feishu:
+  app_id: "cli_xxxxxxxxxx"
+  app_secret: "xxxxxxxxxx"
+  verification_token: ""
+  event_mode: "long_connection"       # long_connection 或 webhook
+
+# ========== 模型后端 (OpenRouter) ==========
+backend:
+  api_key: "sk-or-xxx"
+  model: "anthropic/claude-opus-4.6"
+  timeout_seconds: 45
+  app_name: "feishu-anti-laodeng"
+
+# ========== 可切换模型 ==========
+model_presets:
+  claude-opus-4.6: "anthropic/claude-opus-4.6"
+  deepseek-v3.2: "deepseek/deepseek-chat-v3-0324:free"
+  glm5.1: "z-ai/glm-5.1"
+  kimi-k2.5: "moonshotai/kimi-k2.5"
+
+# ========== 本地模糊匹配阈值 ==========
+fastpath:
+  fuzzy_strict_threshold: 0.9
+  fuzzy_assisted_threshold: 0.8
+
+# ========== 服务地址 ==========
+server:
+  host: "127.0.0.1"
+  port: 8000

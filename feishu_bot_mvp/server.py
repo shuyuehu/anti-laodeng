@@ -20,34 +20,37 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+import yaml
+
 from counter_strategy_bank import IncomingCounterPlanner, format_counter_text
 from fast_path_bank import FastReviewer
 
 
-def _load_dotenv(path: Path) -> None:
-    if not path.is_file():
-        return
-    with open(path, encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            key = key.strip()
-            value = value.strip()
-            if not key:
-                continue
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
-                value = value[1:-1]
-            if value and key not in os.environ:
-                os.environ[key] = value
-
-
-_load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-
 ROOT_DIR = Path(__file__).resolve().parent.parent
+
+
+def _load_yaml_config(path: Path) -> Dict[str, Any]:
+    if not path.is_file():
+        return {}
+    with open(path, encoding="utf-8") as fh:
+        data = yaml.safe_load(fh)
+    return data if isinstance(data, dict) else {}
+
+
+_yaml_cfg = _load_yaml_config(ROOT_DIR / "config.yaml")
+
+
+def _cfg(*keys: str, default: Any = "") -> Any:
+    """Traverse nested yaml config by key path, return default if missing."""
+    node = _yaml_cfg
+    for k in keys:
+        if isinstance(node, dict):
+            node = node.get(k)
+        else:
+            return default
+        if node is None:
+            return default
+    return node
 DEFAULT_SKILL_PATH = ROOT_DIR / "anti-laodeng"
 DEFAULT_SCHEMA_PATH = Path(__file__).resolve().parent / "review_schema.json"
 DEFAULT_COUNTER_SCHEMA_PATH = Path(__file__).resolve().parent / "counter_schema.json"
@@ -56,7 +59,7 @@ DEFAULT_FEISHU_SDK_VENDOR_PATH = Path(__file__).resolve().parent / "_vendor"
 TENANT_TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
 SEND_MESSAGE_URL = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
-SUPPORTED_COMPLEX_PROVIDERS = ("codex", "openrouter", "compatible")
+SUPPORTED_COMPLEX_PROVIDERS = ("openrouter",)
 
 
 def now_ts() -> str:
@@ -67,78 +70,72 @@ def log(message: str) -> None:
     print(f"[{now_ts()}] {message}", flush=True)
 
 
-def read_float_env(name: str, default: float) -> float:
-    raw = os.environ.get(name, "").strip()
-    if not raw:
+def _cfg_float(*keys: str, default: float) -> float:
+    val = _cfg(*keys, default=default)
+    try:
+        return float(val)
+    except (TypeError, ValueError):
         return default
-    return float(raw)
 
 
-def read_json_object_env(name: str) -> Dict[str, str]:
-    raw = os.environ.get(name, "").strip()
-    if not raw:
-        return {}
-    parsed = json.loads(raw)
-    if not isinstance(parsed, dict):
-        raise ValueError(f"{name} must be a JSON object")
-    return {str(key): str(value) for key, value in parsed.items()}
+def _cfg_int(*keys: str, default: int) -> int:
+    val = _cfg(*keys, default=default)
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return default
+
+
+def _cfg_str(*keys: str, default: str = "") -> str:
+    val = _cfg(*keys, default=default)
+    return str(val).strip() if val else default
+
+
+def _cfg_dict(*keys: str) -> Dict[str, str]:
+    val = _cfg(*keys, default={})
+    if isinstance(val, dict):
+        return {str(k): str(v) for k, v in val.items()}
+    return {}
 
 
 def active_model_for_provider(config: "Config", provider: Optional[str] = None) -> str:
-    target = (provider or config.complex_reviewer_provider).strip().lower()
-    if target == "openrouter":
-        return config.openrouter_model
-    if target == "codex":
-        return config.codex_model
-    return config.compatible_model
+    return config.openrouter_model
 
 
 class Config:
     def __init__(self) -> None:
-        self.host = os.environ.get("BRIDGE_HOST", "127.0.0.1")
-        self.port = int(os.environ.get("BRIDGE_PORT", "8000"))
-        self.feishu_app_id = os.environ.get("FEISHU_APP_ID", "").strip()
-        self.feishu_app_secret = os.environ.get("FEISHU_APP_SECRET", "").strip()
-        self.feishu_verification_token = os.environ.get("FEISHU_VERIFICATION_TOKEN", "").strip()
-        self.feishu_event_mode = os.environ.get("FEISHU_EVENT_MODE", "long_connection").strip().lower()
+        self.host = _cfg_str("server", "host", default="127.0.0.1")
+        self.port = _cfg_int("server", "port", default=8000)
+        self.feishu_app_id = _cfg_str("feishu", "app_id")
+        self.feishu_app_secret = _cfg_str("feishu", "app_secret")
+        self.feishu_verification_token = _cfg_str("feishu", "verification_token")
+        self.feishu_event_mode = _cfg_str("feishu", "event_mode", default="long_connection").lower()
         self.feishu_sdk_vendor_path = Path(
-            os.environ.get("FEISHU_SDK_VENDOR_PATH", str(DEFAULT_FEISHU_SDK_VENDOR_PATH))
+            _cfg_str("feishu", "sdk_vendor_path") or str(DEFAULT_FEISHU_SDK_VENDOR_PATH)
         ).resolve()
 
-        self.complex_reviewer_provider = os.environ.get("COMPLEX_REVIEW_PROVIDER", "openrouter").strip().lower()
+        self.complex_reviewer_provider = "openrouter"
 
-        self.openrouter_api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
-        self.openrouter_model = os.environ.get("OPENROUTER_MODEL", "openai/gpt-4.1-mini").strip()
-        self.openrouter_timeout_seconds = int(os.environ.get("OPENROUTER_TIMEOUT_SECONDS", "45"))
-        self.openrouter_site_url = os.environ.get("OPENROUTER_SITE_URL", "").strip()
-        self.openrouter_app_name = os.environ.get("OPENROUTER_APP_NAME", "feishu-anti-laodeng").strip()
+        self.openrouter_api_key = _cfg_str("backend", "api_key")
+        self.openrouter_model = _cfg_str("backend", "model", default="anthropic/claude-opus-4.6")
+        self.openrouter_timeout_seconds = _cfg_int("backend", "timeout_seconds", default=45)
+        self.openrouter_site_url = ""
+        self.openrouter_app_name = _cfg_str("backend", "app_name", default="feishu-anti-laodeng")
 
-        self.codex_bin = os.environ.get("CODEX_BIN", "codex").strip()
-        self.codex_model = os.environ.get("CODEX_MODEL", "gpt-5.3-codex-spark").strip()
-        self.codex_timeout_seconds = int(os.environ.get("CODEX_TIMEOUT_SECONDS", "90"))
-        self.codex_workdir = Path(os.environ.get("CODEX_WORKDIR", str(ROOT_DIR))).resolve()
-
-        self.compatible_chat_url = os.environ.get("COMPATIBLE_CHAT_URL", "").strip()
-        self.compatible_api_key = os.environ.get("COMPATIBLE_API_KEY", "").strip()
-        self.compatible_model = os.environ.get("COMPATIBLE_MODEL", "").strip()
-        self.compatible_timeout_seconds = int(os.environ.get("COMPATIBLE_TIMEOUT_SECONDS", "45"))
-        self.compatible_headers = read_json_object_env("COMPATIBLE_HEADERS_JSON")
-        self.compatible_response_format = os.environ.get("COMPATIBLE_RESPONSE_FORMAT", "json_schema").strip().lower()
-
-        self.fastpath_fuzzy_strict_threshold = read_float_env("FASTPATH_FUZZY_STRICT_THRESHOLD", 0.90)
-        self.fastpath_fuzzy_assisted_threshold = read_float_env("FASTPATH_FUZZY_ASSISTED_THRESHOLD", 0.80)
+        self.fastpath_fuzzy_strict_threshold = _cfg_float("fastpath", "fuzzy_strict_threshold", default=0.90)
+        self.fastpath_fuzzy_assisted_threshold = _cfg_float("fastpath", "fuzzy_assisted_threshold", default=0.80)
 
         self.skill_path = Path(
-            os.environ.get("ANTI_LAODENG_SKILL_PATH", str(DEFAULT_SKILL_PATH))
+            _cfg_str("paths", "skill") or str(DEFAULT_SKILL_PATH)
         ).resolve()
         self.schema_path = Path(
-            os.environ.get("REVIEW_SCHEMA_PATH", str(DEFAULT_SCHEMA_PATH))
+            _cfg_str("paths", "review_schema") or str(DEFAULT_SCHEMA_PATH)
         ).resolve()
         self.counter_schema_path = Path(
-            os.environ.get("COUNTER_SCHEMA_PATH", str(DEFAULT_COUNTER_SCHEMA_PATH))
+            _cfg_str("paths", "counter_schema") or str(DEFAULT_COUNTER_SCHEMA_PATH)
         ).resolve()
         self.counter_guide_path = Path(
-            os.environ.get("COUNTER_GUIDE_PATH", str(DEFAULT_COUNTER_GUIDE_PATH))
+            _cfg_str("paths", "counter_guide") or str(DEFAULT_COUNTER_GUIDE_PATH)
         ).resolve()
 
     def validate_common(self) -> None:
@@ -152,8 +149,6 @@ class Config:
             raise ValueError(f"Counter schema path does not exist: {self.counter_schema_path}")
         if not self.counter_guide_path.exists():
             raise ValueError(f"Counter guide path does not exist: {self.counter_guide_path}")
-        if not self.codex_workdir.exists():
-            raise ValueError(f"CODEX_WORKDIR does not exist: {self.codex_workdir}")
         if not 0.0 <= self.fastpath_fuzzy_assisted_threshold <= 1.0:
             raise ValueError("FASTPATH_FUZZY_ASSISTED_THRESHOLD must be between 0.0 and 1.0")
         if not 0.0 <= self.fastpath_fuzzy_strict_threshold <= 1.0:
@@ -162,34 +157,10 @@ class Config:
             raise ValueError(
                 "FASTPATH_FUZZY_ASSISTED_THRESHOLD must be less than or equal to FASTPATH_FUZZY_STRICT_THRESHOLD"
             )
-        if self.compatible_response_format not in {"json_schema", "json_object", "none"}:
-            raise ValueError("COMPATIBLE_RESPONSE_FORMAT must be one of: json_schema, json_object, none")
 
     def validate_complex_reviewer(self) -> None:
-        provider = self.complex_reviewer_provider
-        if provider == "openrouter":
-            if not self.openrouter_api_key:
-                raise ValueError("OPENROUTER_API_KEY is required when COMPLEX_REVIEW_PROVIDER=openrouter")
-            return
-        if provider == "codex":
-            resolved_bin = shutil.which(self.codex_bin) if os.path.sep not in self.codex_bin else self.codex_bin
-            if not resolved_bin:
-                raise ValueError(f"CODEX_BIN could not be found: {self.codex_bin}")
-            return
-        if provider == "compatible":
-            missing = []
-            if not self.compatible_chat_url:
-                missing.append("COMPATIBLE_CHAT_URL")
-            if not self.compatible_api_key:
-                missing.append("COMPATIBLE_API_KEY")
-            if not self.compatible_model:
-                missing.append("COMPATIBLE_MODEL")
-            if missing:
-                raise ValueError(
-                    f"Missing required environment variables for COMPLEX_REVIEW_PROVIDER=compatible: {', '.join(missing)}"
-                )
-            return
-        raise ValueError("COMPLEX_REVIEW_PROVIDER must be one of: openrouter, codex, compatible")
+        if not self.openrouter_api_key:
+            raise ValueError("backend.api_key is required in config.yaml")
 
     def validate_server(self) -> None:
         self.validate_common()
@@ -325,8 +296,48 @@ class StructuredReviewerBase:
         ]
         return "\n".join(parts)
 
+    @staticmethod
+    def _strip_markdown_block(text: str) -> str:
+        stripped = text.strip()
+        if stripped.startswith("```"):
+            first_nl = stripped.find("\n")
+            if first_nl != -1:
+                stripped = stripped[first_nl + 1:]
+            if stripped.rstrip().endswith("```"):
+                stripped = stripped.rstrip()[:-3]
+        return stripped.strip()
+
+    @staticmethod
+    def _fix_unescaped_quotes(text: str) -> str:
+        result = []
+        in_string = False
+        i = 0
+        while i < len(text):
+            ch = text[i]
+            if not in_string:
+                result.append(ch)
+                if ch == '"':
+                    in_string = True
+            else:
+                if ch == '\\':
+                    result.append(ch)
+                    if i + 1 < len(text):
+                        i += 1
+                        result.append(text[i])
+                elif ch == '"':
+                    lookahead = text[i + 1:].lstrip()
+                    if lookahead and lookahead[0] in (',', '}', ']', ':'):
+                        result.append(ch)
+                        in_string = False
+                    else:
+                        result.append('\\"')
+                else:
+                    result.append(ch)
+            i += 1
+        return "".join(result)
+
     def _extract_json(self, raw_content: str) -> Dict[str, Any]:
-        text = raw_content.strip()
+        text = self._strip_markdown_block(raw_content)
         try:
             return json.loads(text)
         except json.JSONDecodeError:
@@ -339,21 +350,39 @@ class StructuredReviewerBase:
                 return json.loads(snippet)
             except json.JSONDecodeError:
                 pass
-            fixed = re.sub(r'"\s*\n\s*"', '",\n"', snippet)
-            fixed = re.sub(r'"\s*\n\s*}', '"\n}', fixed)
-            fixed = re.sub(r'"\s*\n\s*]', '"\n]', fixed)
-            fixed = re.sub(r']\s*\n\s*"', '],\n"', fixed)
-            fixed = re.sub(r'}\s*\n\s*"', '},\n"', fixed)
+            fixed = self._fix_unescaped_quotes(snippet)
             try:
                 return json.loads(fixed)
             except json.JSONDecodeError:
                 pass
+            fixed2 = re.sub(r'"\s*\n\s*"', '",\n"', fixed)
+            fixed2 = re.sub(r'"\s*\n\s*}', '"\n}', fixed2)
+            fixed2 = re.sub(r'"\s*\n\s*]', '"\n]', fixed2)
+            fixed2 = re.sub(r']\s*\n\s*"', '],\n"', fixed2)
+            fixed2 = re.sub(r'}\s*\n\s*"', '},\n"', fixed2)
+            try:
+                return json.loads(fixed2)
+            except json.JSONDecodeError:
+                pass
         raise RuntimeError(f"Failed to parse JSON from LLM response: {text[:500]}")
+
+    _FIELD_DEFAULTS: Dict[str, Any] = {
+        "risk_level": "medium",
+        "scene": "",
+        "problem": "",
+        "analysis": "",
+        "follow_up": "",
+    }
 
     def _validate_payload(self, payload: Dict[str, Any], required: list[str], label: str) -> Dict[str, Any]:
         missing = [key for key in required if key not in payload]
-        if missing:
-            raise RuntimeError(f"{label} response missing keys: {', '.join(missing)}")
+        for key in missing:
+            if key in self._FIELD_DEFAULTS:
+                payload[key] = self._FIELD_DEFAULTS[key]
+                log(f"WARNING: {label} response missing '{key}', using default")
+        still_missing = [key for key in required if key not in payload]
+        if still_missing:
+            raise RuntimeError(f"{label} response missing keys: {', '.join(still_missing)}")
         return payload
 
     @staticmethod
@@ -403,22 +432,28 @@ class StructuredReviewerBase:
 
 class OpenRouterReviewer(StructuredReviewerBase):
     def _complete_json(self, system_prompt: str, user_prompt: str, schema: Dict[str, Any], schema_name: str) -> Dict[str, Any]:
-        payload = {
-            "model": self.config.openrouter_model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "temperature": 0.1,
-            "max_completion_tokens": 2048,
-            "response_format": {
+        model = self.config.openrouter_model
+        is_claude = "claude" in model.lower() or "anthropic" in model.lower()
+        if is_claude:
+            response_format = {"type": "json_object"}
+        else:
+            response_format = {
                 "type": "json_schema",
                 "json_schema": {
                     "name": schema_name,
                     "strict": True,
                     "schema": schema,
                 },
-            },
+            }
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.1,
+            "max_completion_tokens": 8192,
+            "response_format": response_format,
         }
         headers = {
             "Authorization": f"Bearer {self.config.openrouter_api_key}",
@@ -445,6 +480,11 @@ class OpenRouterReviewer(StructuredReviewerBase):
         choices = response_json.get("choices") or []
         if not choices:
             raise RuntimeError(f"OpenRouter returned no choices: {response_json}")
+        finish_reason = choices[0].get("finish_reason", "unknown")
+        usage = response_json.get("usage", {})
+        log(f"OpenRouter finish_reason={finish_reason} usage={usage}")
+        if finish_reason == "length":
+            log("WARNING: response was truncated due to max_tokens limit")
         content = choices[0].get("message", {}).get("content", "")
         if not content:
             raise RuntimeError(f"OpenRouter returned empty content: {response_json}")
@@ -456,12 +496,10 @@ class OpenRouterReviewer(StructuredReviewerBase):
         required = [
             "risk_level",
             "scene",
-            "summary",
-            "red_flags",
-            "impact",
-            "standard_rewrite",
-            "firm_rewrite",
-            "next_move",
+            "problem",
+            "rewrite_mild",
+            "rewrite_balanced",
+            "rewrite_direct",
         ]
         return self._validate_payload(payload, required, "review")
 
@@ -487,7 +525,7 @@ class CompatibleApiReviewer(StructuredReviewerBase):
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": 0.1,
-            "max_tokens": 2048,
+            "max_tokens": 8192,
         }
         if self.config.compatible_response_format == "json_schema":
             payload["response_format"] = {
@@ -536,12 +574,10 @@ class CompatibleApiReviewer(StructuredReviewerBase):
         required = [
             "risk_level",
             "scene",
-            "summary",
-            "red_flags",
-            "impact",
-            "standard_rewrite",
-            "firm_rewrite",
-            "next_move",
+            "problem",
+            "rewrite_mild",
+            "rewrite_balanced",
+            "rewrite_direct",
         ]
         return self._validate_payload(payload, required, "review")
 
@@ -611,12 +647,10 @@ class CodexReviewer(StructuredReviewerBase):
         required = [
             "risk_level",
             "scene",
-            "summary",
-            "red_flags",
-            "impact",
-            "standard_rewrite",
-            "firm_rewrite",
-            "next_move",
+            "problem",
+            "rewrite_mild",
+            "rewrite_balanced",
+            "rewrite_direct",
         ]
         return self._validate_payload(payload, required, "review")
 
@@ -700,30 +734,36 @@ def text_to_post_content(text: str) -> list:
     return paragraphs
 
 
+def _flatten(text: str) -> str:
+    joined = " ".join(line.strip() for line in text.splitlines() if line.strip())
+    joined = joined.replace("**", "")
+    return joined
+
+
 def format_review_text(review: Dict[str, Any]) -> str:
     risk_map = {"low": "低风险", "medium": "中风险", "high": "高风险"}
     risk_emoji = {"low": "[:CheckMark:]", "medium": "[:THINKING:]", "high": "[:FIRE:]"}
     risk = review["risk_level"]
-    lines = [f"**老登预检：**{risk_map.get(risk, risk)} {risk_emoji.get(risk, '')}"]
-    red_flags = [item.strip() for item in review.get("red_flags", []) if str(item).strip()]
-    if red_flags:
-        lines.extend(["", f"**注意：**{'；'.join(red_flags[:2])}"])
-    scene = str(review.get("scene", "")).strip()
-    if scene:
-        lines.extend(["", f"**场景：**{scene}"])
+    lines = [f"**登味预检：**{risk_map.get(risk, risk)} {risk_emoji.get(risk, '')}"]
+    problem = _flatten(str(review.get("problem", "")))
+    if problem:
+        lines.extend(["", "**登味来源：**", problem])
     lines.extend(
         [
             "",
-            "**标准版：**",
-            review["standard_rewrite"],
+            "**温和版改写：**",
+            review["rewrite_mild"],
             "",
-            "**更坚定版：**",
-            review["firm_rewrite"],
+            "**平衡版改写：**",
+            review["rewrite_balanced"],
+            "",
+            "**直接版改写：**",
+            review["rewrite_direct"],
         ]
     )
-    next_move = str(review.get("next_move", "")).strip()
-    if next_move:
-        lines.extend(["", f"**补一句：**{next_move}"])
+    follow_up = _flatten(str(review.get("follow_up", "")))
+    if follow_up:
+        lines.extend(["", "**后续建议：**", follow_up])
     return "\n".join(lines)
 
 
@@ -823,33 +863,21 @@ def parse_prefixed_request(text: str) -> Dict[str, str]:
 
 def usage_text() -> str:
     return (
-        "我是反老登机器人，帮你做两件事：发前预检和来话应对。\n\n"
-        "**用法：**\n"
-        "- To: ... 你准备发出去的话，我帮你做老登预检\n"
-        "- Re: ... 别人发给你的话，我帮你想低风险回复\n"
-        "- Re领导: ... 领导发给你的（更精准）\n"
-        "- Re同事: ... 同事发给你的（更精准）\n"
-        "- 不加前缀也行，我会自动判断\n\n"
-        "**提供更多上下文，效果更好：**\n"
-        "To: 场景：周会后单聊\n"
-        "对象：下属\n"
-        "目的：催进度但不想太冲\n"
-        "今晚必须改完，别再给我找理由。\n\n"
-        "Re领导: 场景：群聊里被点名\n"
-        "对象：部门总监\n"
-        "别跟我解释了，今晚必须给我结果。\n\n"
-        "直接发一句话也完全没问题：\n"
-        "- To: 今晚必须改完，别再给我找理由。\n"
-        "- Re领导: 别跟我解释了，今晚必须给我结果。\n\n"
-        "控制命令：\n"
-        "- 取消：取消处理中的请求\n"
-        "- 查看当前模型：查看正在使用的模型\n"
-        "- 切换到glm5.1\n"
-        "- 切换到gpt-5.4-nano\n"
-        "- 切换到claude-opus-4.6\n"
-        "- 切换到gpt-5.4\n"
-        "- 使用说明：显示本说明\n\n"
-        "目前只支持私聊里的文本消息。"
+        'Anti老登 — 消灭职场登味，砍掉沟通内耗，让真诚成为必杀技。\n\n'
+        '发消息给我就行，两种玩法：\n\n'
+        '🛡 **去登味** — 发之前帮你查查有没有登味\n'
+        'To：我想询问下属为什么未能按时完成需求："你这个需求很简单啊，我感觉上周就该搞定了吧？"\n'
+        'To：季度复盘会后，我跟组员一对一沟通。我想鼓励他下个季度多主动承担一些："你这个季度表现还行，但说实话跟你同期进来的小王比还是差了一截。"\n\n'
+        '⚔ **回登话** — 别人甩来的登味，帮你拆招\n'
+        'Re领导：我最近在做个产品的新方案。我领导说"你这想法不错，但太理想化了，一看就是没被社会毒打过。你听我的，总没错。我吃过的盐比你吃过的饭多。"\n'
+        'Re领导：我领导要求我们组每天加班到996，我想早点走。我领导说"趁年轻多吃点苦，对你以后有好处。现在舒服了，以后就要吃大亏。"\n'
+        'Re同事：我刚加入我们公司，想找同事请教一个问题。我同事说"这个道理还要我教你？自己多悟一悟，多想想就知道了。"\n\n'
+        '不加 To/Re 也行，我会自动判断。加上 Re领导/Re同事 更精准。\n\n'
+        '📋 **功能按钮**\n'
+        '- 使用说明 — 你正在看的这个\n'
+        '- 取消 — 等不及了？随时打断\n'
+        '- 查看当前模型 — 看看现在谁在帮你\n'
+        '- 切换模型 — 尝试不同的模型\n'
     )
 
 
@@ -862,24 +890,14 @@ def build_fast_reviewer(config: Config) -> FastReviewer:
 
 def with_runtime_backend(config: Config, provider: str, model: Optional[str] = None) -> Config:
     runtime = copy.copy(config)
-    runtime.complex_reviewer_provider = provider
-    if provider == "openrouter":
-        runtime.openrouter_model = model or runtime.openrouter_model
-    elif provider == "codex":
-        runtime.codex_model = model or runtime.codex_model
-    else:
-        runtime.compatible_model = model or runtime.compatible_model
+    runtime.complex_reviewer_provider = "openrouter"
+    runtime.openrouter_model = model or runtime.openrouter_model
     return runtime
 
 
 def build_complex_reviewer(config: Config) -> StructuredReviewerBase:
     config.validate_complex_reviewer()
-    provider = config.complex_reviewer_provider
-    if provider == "openrouter":
-        return OpenRouterReviewer(config)
-    if provider == "codex":
-        return CodexReviewer(config)
-    return CompatibleApiReviewer(config)
+    return OpenRouterReviewer(config)
 
 
 def build_counter_planner() -> IncomingCounterPlanner:
@@ -939,12 +957,22 @@ class BackendSettingsStore:
             return self._default
 
 
-MODEL_PRESETS: Dict[str, Tuple[str, str]] = {
-    "glm5.1": ("openrouter", "z-ai/glm-5.1"),
-    "gpt-5.4-nano": ("openrouter", "openai/gpt-5.4-nano"),
+_DEFAULT_MODEL_PRESETS: Dict[str, Tuple[str, str]] = {
     "claude-opus-4.6": ("openrouter", "anthropic/claude-opus-4.6"),
-    "gpt-5.4": ("openrouter", "openai/gpt-5.4"),
+    "deepseek-v3.2": ("openrouter", "deepseek/deepseek-v3.2"),
+    "glm-5.1": ("openrouter", "z-ai/glm-5.1"),
+    "kimi-k2.5": ("openrouter", "moonshotai/kimi-k2.5"),
 }
+
+
+def _load_model_presets() -> Dict[str, Tuple[str, str]]:
+    raw = _cfg("model_presets", default=None)
+    if not isinstance(raw, dict) or not raw:
+        return dict(_DEFAULT_MODEL_PRESETS)
+    return {str(k): ("openrouter", str(v)) for k, v in raw.items() if k and v}
+
+
+MODEL_PRESETS: Dict[str, Tuple[str, str]] = _load_model_presets()
 
 BACKEND_STATUS_COMMANDS = {"查看当前模型", "当前模型"}
 
@@ -1004,7 +1032,7 @@ class BridgeApp:
             return
         selection = self.backend_settings.get(chat_id)
         message = (
-            "这次老登预检没跑出来。\n"
+            "这次登味预检没跑出来。\n"
             f"复杂表达当前后端：{selection.provider}\n"
             f"当前模型：{selection.model}\n"
             "你可以稍后重试一次；如果持续失败，我会继续走本地模板快路径。"
@@ -1090,37 +1118,30 @@ class BridgeApp:
         parsed = parse_user_input(request["body"])
         if request["mode"] == "incoming_counter":
             sender_role = request["sender_role"]
-            analysis = self.fast_reviewer.analyze(request["body"])
-            if analysis:
-                log(f"fast counter path hit for message {message_id}")
-                plan = self.counter_planner.plan(
-                    request["body"],
-                    analysis,
-                    sender_role=sender_role,
-                )
-            else:
-                self.feishu.send_text(chat_id, "收到，处理中...")
-                selection, reviewer = self._get_complex_reviewer(chat_id)
-                log(f"complex counter path provider={selection.provider} model={selection.model} message={message_id}")
-                plan = reviewer.plan_counter(
-                    parsed,
-                    sender_role=sender_role,
-                )
-                used_complex = True
+            fast_analysis = self.fast_reviewer.analyze(parsed["message"])
+            if fast_analysis:
+                log(f"fast counter path would hit for message {message_id} (bypassed)")
+            self.feishu.send_text(chat_id, "收到，处理中...")
+            selection, reviewer = self._get_complex_reviewer(chat_id)
+            log(f"complex counter path provider={selection.provider} model={selection.model} message={message_id}")
+            plan = reviewer.plan_counter(
+                parsed,
+                sender_role=sender_role,
+            )
+            used_complex = True
             if used_complex and self._is_cancelled(chat_id):
                 log(f"cancelled after complex counter for message {message_id}")
                 return
             response_text = format_counter_text(plan)
         else:
-            review = self.fast_reviewer.review(request["body"])
-            if review:
-                log(f"fast review path hit for message {message_id}")
-            else:
-                self.feishu.send_text(chat_id, "收到，处理中...")
-                selection, reviewer = self._get_complex_reviewer(chat_id)
-                log(f"complex review path provider={selection.provider} model={selection.model} message={message_id}")
-                review = reviewer.review(parsed)
-                used_complex = True
+            fast_review = self.fast_reviewer.review(parsed["message"])
+            if fast_review:
+                log(f"fast review path would hit for message {message_id} (bypassed)")
+            self.feishu.send_text(chat_id, "收到，处理中...")
+            selection, reviewer = self._get_complex_reviewer(chat_id)
+            log(f"complex review path provider={selection.provider} model={selection.model} message={message_id}")
+            review = reviewer.review(parsed)
+            used_complex = True
             if used_complex and self._is_cancelled(chat_id):
                 log(f"cancelled after complex review for message {message_id}")
                 return
@@ -1310,20 +1331,13 @@ def review_once(config: Config, text: str) -> None:
     counter_planner = build_counter_planner()
     request = parse_prefixed_request(text)
     parsed = parse_user_input(request["body"])
+    reviewer = build_complex_reviewer(config)
     if request["mode"] == "incoming_counter":
         sender_role = request["sender_role"]
-        analysis = fast_reviewer.analyze(request["body"])
-        if analysis:
-            plan = counter_planner.plan(request["body"], analysis, sender_role=sender_role)
-        else:
-            reviewer = build_complex_reviewer(config)
-            plan = reviewer.plan_counter(parsed, sender_role=sender_role)
+        plan = reviewer.plan_counter(parsed, sender_role=sender_role)
         print(format_counter_text(plan))
         return
-    review = fast_reviewer.review(request["body"])
-    if not review:
-        reviewer = build_complex_reviewer(config)
-        review = reviewer.review(parsed)
+    review = reviewer.review(parsed)
     print(format_review_text(review))
 
 
